@@ -31,6 +31,10 @@ DEBUG = os.getenv("DEBUG", "False").lower() == "true"
 
 ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "").split(",")
 
+AWS_STORAGE_BUCKET_NAME = os.getenv("AWS_STORAGE_BUCKET_NAME")
+AWS_S3_REGION_NAME = os.getenv("AWS_S3_REGION_NAME")
+AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
+AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
 
 # Application definition
 
@@ -44,8 +48,17 @@ INSTALLED_APPS = [
     'rest_framework',
     'accounts',
     'rest_framework_simplejwt.token_blacklist',
+    'storages',
 ]
 
+STORAGES = {
+    "default": {
+        "BACKEND": "storages.backends.s3.S3Storage",
+    },
+    "staticfiles": {
+        "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+    },
+}
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
