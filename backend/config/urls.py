@@ -21,5 +21,6 @@ from .views import HealthAPIView
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('accounts/',include("accounts.urls")),
+    path('accounts/',include('allauth.urls')),
     path('api/health/', HealthAPIView.as_view(), name='health'),
 ]
