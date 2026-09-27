@@ -5,14 +5,14 @@ from rest_framework_simplejwt.tokens import RefreshToken
 import re
 
 
-USERNAME_REGEX = r'^[a-zA-Z0-9_]{3,30}$'
+USERNAME_REGEX = r'^[a-zA-Z0-9_]{3,50}$'
 
 PASSWORD_REGEX = (
     r'^(?=.*[a-z])'
     r'(?=.*[A-Z])'
     r'(?=.*\d)'
     r'(?=.*[@$!%*?&#])'
-    r'[A-Za-z\d@$!%*?&#]{8,}$'
+    r'[A-Za-z\d@$!%*?&#]{8,30}$'
 )
 
 class RegisterSerializer(serializers.ModelSerializer):
@@ -76,6 +76,7 @@ class LoginSerializer(serializers.Serializer):
       raise serializers.ValidationError('User account is disabled.')
 
     refresh = RefreshToken.for_user(user)
+    refresh["token_version"] = user.profile.token_version
 
     return{
       'refresh': str(refresh),

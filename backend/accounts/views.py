@@ -13,6 +13,10 @@ from .serializers import (
 from rest_framework.permissions import IsAuthenticated
 from rest_framework_simplejwt.tokens import RefreshToken
 import secrets
+from rest_framework_simplejwt.token_blacklist.models import (
+    OutstandingToken,
+    BlacklistedToken,
+)
 
 from django.contrib.auth.models import User
 from django.core.mail import send_mail
@@ -326,6 +330,14 @@ class ChangePasswordApi(APIView):
             status=status.HTTP_400_BAD_REQUEST)
         user.set_password(new_password)
         user.save()
+
+        user.profile.token_version += 1
+        user.profile.save(update_fields=["token_version"])
+
+        for outstanding_token in OutstandingToken.objects.filter(user=user):
+            BlacklistedToken.objects.get_or_create(
+                token=outstanding_token
+            )
 
         return Response({
            "message": "Password changed successfuly."
