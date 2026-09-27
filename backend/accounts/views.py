@@ -8,6 +8,7 @@ from .serializers import (
   ForgotPasswordSerializer,
   VerifyResetOTPSerializer,
   ResetPasswordSerializer,
+  ChangePasswordSerializer,
 )
 from rest_framework.permissions import IsAuthenticated
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -300,3 +301,33 @@ class ResetPasswordApi(APIView):
             },
             status=status.HTTP_200_OK
         )
+
+class ChangePasswordApi(APIView):
+
+    permission_classes=[ IsAuthenticated]
+
+    def post(self, request):
+        serializer=ChangePasswordSerializer(data=request.data)
+
+        if not serializer.is_valid():
+            return Response(
+                serializer.errors,
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        user=request.user
+
+        current_password=serializer.validated_data["current_password"]
+        new_password=serializer.validated_data["new_password"]
+
+        if not user.check_password(current_password):
+            return Response({
+               "error": "Current Password is incorrect."
+            },
+            status=status.HTTP_400_BAD_REQUEST)
+        user.set_password(new_password)
+        user.save()
+
+        return Response({
+           "message": "Password changed successfuly."
+        }, status=status.HTTP_200_OK)
+
