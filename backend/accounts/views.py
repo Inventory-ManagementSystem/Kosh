@@ -72,3 +72,21 @@ class LogoutApi(APIView):
         'error': 'Invalid refresh token.'
         },status=status.HTTP_400_BAD_REQUEST
       )
+
+
+
+class GoogleJWTApi(APIView):
+  def get(self, request):
+    user = request.user
+    if not user.is_authenticated:
+      return Response({"error": "Google authentication failed."
+        },status=status.HTTP_401_UNAUTHORIZED
+      )
+
+    refresh = RefreshToken.for_user(user)
+
+    return Response({
+      "refresh": str(refresh),
+      "access": str(refresh.access_token)
+      },status=status.HTTP_200_OK
+    )
