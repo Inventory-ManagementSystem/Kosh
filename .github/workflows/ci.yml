@@ -1,0 +1,32 @@
+name: Kosh CI
+
+on:
+  push:
+    branches:
+      - main
+
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  docker-ci:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build backend Docker image
+        run: |
+          docker build \
+            -t kosh-backend:ci \
+            ./backend
+
+      - name: Run Django system check
+        run: |
+          docker run --rm \
+            -e SECRET_KEY=ci-secret-key \
+            -e DEBUG=False \
+            kosh-backend:ci \
+            python manage.py check
