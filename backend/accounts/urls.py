@@ -14,4 +14,5 @@ urlpatterns = [
   path('reset-password/', views.ResetPasswordApi.as_view(), name="reset-password"),
   path('change-password/', views.ChangePasswordApi.as_view(), name="change-password"),
 
+  path('google/jwt/',views.GoogleJWTApi.as_view(),name='google_jwt'),
 ]

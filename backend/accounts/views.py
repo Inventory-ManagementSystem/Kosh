@@ -343,3 +343,21 @@ class ChangePasswordApi(APIView):
            "message": "Password changed successfuly."
         }, status=status.HTTP_200_OK)
 
+
+
+class GoogleJWTApi(APIView):
+  def get(self, request):
+    user = request.user
+    if not user.is_authenticated:
+      return Response({"error": "Google authentication failed."
+        },status=status.HTTP_401_UNAUTHORIZED
+      )
+
+    refresh = RefreshToken.for_user(user)
+    refresh["token_version"] = user.profile.token_version
+
+    return Response({
+      "refresh": str(refresh),
+      "access": str(refresh.access_token)
+      },status=status.HTTP_200_OK
+    )
