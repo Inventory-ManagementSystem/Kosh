@@ -25,6 +25,7 @@ from django.core.mail import send_mail
 from django.core.cache import cache
 
 from drf_spectacular.utils import (extend_schema,OpenApiResponse,OpenApiExample)
+from drf_spectacular.types import OpenApiTypes
 
 
 @extend_schema(
@@ -43,20 +44,9 @@ from drf_spectacular.utils import (extend_schema,OpenApiResponse,OpenApiExample)
             request_only=True,
         ),
         OpenApiExample(
-            "Another Valid User",
-            summary="Second test user",
-            description="Another valid registration payload.",
-            value={
-                "username": "alice_smith",
-                "email": "alice@example.com",
-                "password": "Alice@1234"
-            },
-            request_only=True,
-        ),
-        OpenApiExample(
             "Duplicate Username",
-            summary="Test duplicate username",
-            description="Use this after john_doe has already been registered.",
+            summary="Username already exists",
+            description="Use this data after john_doe has already been registered.",
             value={
                 "username": "john_doe",
                 "email": "newuser@example.com",
@@ -67,6 +57,7 @@ from drf_spectacular.utils import (extend_schema,OpenApiResponse,OpenApiExample)
     ],
     responses={
         201: OpenApiResponse(
+            response=OpenApiTypes.OBJECT,
             description="User registered successfully.",
             examples=[
                 OpenApiExample(
@@ -74,20 +65,23 @@ from drf_spectacular.utils import (extend_schema,OpenApiResponse,OpenApiExample)
                     value={
                         "message": "User Registered Successfully"
                     },
-                )
+                    response_only=True,
+                ),
             ],
         ),
         400: OpenApiResponse(
+            response=OpenApiTypes.OBJECT,
             description="Validation error.",
             examples=[
                 OpenApiExample(
-                    "Validation Error",
+                    "Duplicate Username",
                     value={
                         "username": [
                             "Username already exists."
                         ]
                     },
-                )
+                    response_only=True,
+                ),
             ],
         ),
     },
@@ -114,25 +108,35 @@ class RegisterApi(APIView):
     examples=[
         OpenApiExample(
             "Login with Email",
-            summary="Login using email",
+            summary="Successful login using email",
             value={
                 "identifier": "john@example.com",
-                "password": "John@1234",
+                "password": "John@1234"
             },
             request_only=True,
         ),
         OpenApiExample(
             "Login with Username",
-            summary="Login using username",
+            summary="Successful login using username",
             value={
                 "identifier": "john_doe",
-                "password": "John@1234",
+                "password": "John@1234"
+            },
+            request_only=True,
+        ),
+        OpenApiExample(
+            "Invalid Credentials",
+            summary="Failed login",
+            value={
+                "identifier": "john@example.com",
+                "password": "WrongPassword@123"
             },
             request_only=True,
         ),
     ],
     responses={
         200: OpenApiResponse(
+            response=OpenApiTypes.OBJECT,
             description="Login successful.",
             examples=[
                 OpenApiExample(
@@ -142,12 +146,14 @@ class RegisterApi(APIView):
                         "message": "Login successful.",
                         "refresh": "eyJhbGciOiJIUzI1NiIs...",
                         "access": "eyJhbGciOiJIUzI1NiIs...",
-                        "has_business": False,
+                        "has_business": False
                     },
-                )
+                    response_only=True,
+                ),
             ],
         ),
         400: OpenApiResponse(
+            response=OpenApiTypes.OBJECT,
             description="Invalid credentials.",
             examples=[
                 OpenApiExample(
@@ -160,7 +166,8 @@ class RegisterApi(APIView):
                             ]
                         }
                     },
-                )
+                    response_only=True,
+                ),
             ],
         ),
     },
@@ -193,18 +200,22 @@ class LoginApi(APIView):
     description="Retrieve the profile information of the currently authenticated user.",
     responses={
         200: OpenApiResponse(
+            response=OpenApiTypes.OBJECT,
             description="Profile retrieved successfully.",
             examples=[
                 OpenApiExample(
                     "Profile Success",
                     value={
-                        "username": "john_doe",
+                        "id": 1,
                         "email": "john@example.com",
+                        "username": "john_doe"
                     },
+                    response_only=True,
                 ),
             ],
         ),
         401: OpenApiResponse(
+            response=OpenApiTypes.OBJECT,
             description="Authentication credentials were not provided or are invalid.",
             examples=[
                 OpenApiExample(
@@ -212,6 +223,7 @@ class LoginApi(APIView):
                     value={
                         "detail": "Authentication credentials were not provided."
                     },
+                    response_only=True,
                 ),
             ],
         ),
@@ -234,6 +246,7 @@ class ProfileApi(APIView):
     description="Logs out the currently authenticated user.",
     responses={
         200: OpenApiResponse(
+            response=OpenApiTypes.OBJECT,
             description="Logout successful.",
             examples=[
                 OpenApiExample(
@@ -241,14 +254,42 @@ class ProfileApi(APIView):
                     value={
                         "message": "Logout successful."
                     },
+                    response_only=True,
                 ),
             ],
         ),
         400: OpenApiResponse(
-            description="Invalid logout request.",
+            response=OpenApiTypes.OBJECT,
+            description="Invalid or missing refresh token.",
+            examples=[
+                OpenApiExample(
+                    "Missing Refresh Token",
+                    value={
+                        "error": "Refresh token is required."
+                    },
+                    response_only=True,
+                ),
+                OpenApiExample(
+                    "Invalid Refresh Token",
+                    value={
+                        "error": "Invalid refresh token."
+                    },
+                    response_only=True,
+                ),
+            ],
         ),
         401: OpenApiResponse(
+            response=OpenApiTypes.OBJECT,
             description="Authentication credentials were not provided or are invalid.",
+            examples=[
+                OpenApiExample(
+                    "Unauthorized",
+                    value={
+                        "detail": "Authentication credentials were not provided."
+                    },
+                    response_only=True,
+                ),
+            ],
         ),
     },
 )
@@ -279,34 +320,42 @@ class LogoutApi(APIView):
 @extend_schema(
     summary="Request Password Reset",
     description="Sends a password reset OTP to the user's registered email address.",
-
     request=ForgotPasswordSerializer,
-
     examples=[
         OpenApiExample(
-            "Forgot Password Request",
-            summary="Request password reset",
+            "Valid Email",
+            summary="Successful password reset request",
             value={
                 "email": "john@example.com"
             },
             request_only=True,
         ),
+        OpenApiExample(
+            "Invalid Email",
+            summary="Failed password reset request",
+            value={
+                "email": "unknown@example.com"
+            },
+            request_only=True,
+        ),
     ],
-
     responses={
         200: OpenApiResponse(
+            response=OpenApiTypes.OBJECT,
             description="Password reset OTP sent successfully.",
             examples=[
                 OpenApiExample(
                     "OTP Sent",
                     value={
-                        "message": "OTP sent successfully."
+                        "message": "If an account exists with this email, "
+                                   "a password reset OTP has been sent."
                     },
+                    response_only=True,
                 ),
             ],
         ),
-
         400: OpenApiResponse(
+            response=OpenApiTypes.OBJECT,
             description="Invalid request or email address.",
             examples=[
                 OpenApiExample(
@@ -316,6 +365,21 @@ class LogoutApi(APIView):
                             "User with this email does not exist."
                         ]
                     },
+                    response_only=True,
+                ),
+            ],
+        ),
+        429: OpenApiResponse(
+            response=OpenApiTypes.OBJECT,
+            description="Too many OTP requests.",
+            examples=[
+                OpenApiExample(
+                    "OTP Cooldown",
+                    value={
+                        "message": "Please wait before requesting another OTP.",
+                        "retry_after": 45
+                    },
+                    response_only=True,
                 ),
             ],
         ),
@@ -391,20 +455,73 @@ class ForgotPasswordApi(APIView):
     request=VerifyResetOTPSerializer,
     examples=[
         OpenApiExample(
-            "Verify OTP",
+            "Valid OTP",
+            summary="Successful OTP verification",
             value={
                 "email": "john@example.com",
                 "otp": "123456"
             },
             request_only=True,
         ),
+        OpenApiExample(
+            "Invalid OTP",
+            summary="Failed OTP verification",
+            value={
+                "email": "john@example.com",
+                "otp": "654321"
+            },
+            request_only=True,
+        ),
     ],
     responses={
         200: OpenApiResponse(
-            description="OTP verified successfully."
+            response=OpenApiTypes.OBJECT,
+            description="OTP verified successfully.",
+            examples=[
+                OpenApiExample(
+                    "OTP Verified",
+                    value={
+                        "message": "OTP verified successfully.",
+                        "reset_token": "example-reset-token"
+                    },
+                    response_only=True,
+                ),
+            ],
         ),
         400: OpenApiResponse(
-            description="Invalid or expired OTP."
+            response=OpenApiTypes.OBJECT,
+            description="Invalid or expired OTP.",
+            examples=[
+                OpenApiExample(
+                    "Invalid OTP",
+                    value={
+                        "error": "Invalid OTP.",
+                        "attempts_remaining": 4
+                    },
+                    response_only=True,
+                ),
+                OpenApiExample(
+                    "Expired OTP",
+                    value={
+                        "error": "OTP has expired or is invalid."
+                    },
+                    response_only=True,
+                ),
+            ],
+        ),
+        429: OpenApiResponse(
+            response=OpenApiTypes.OBJECT,
+            description="Too many incorrect OTP attempts.",
+            examples=[
+                OpenApiExample(
+                    "Too Many Attempts",
+                    value={
+                        "error": "Too many incorrect attempts. "
+                                 "Please request a new OTP."
+                    },
+                    response_only=True,
+                ),
+            ],
         ),
     },
 )
@@ -515,28 +632,64 @@ class VerifyResetOTPApi(APIView):
 @extend_schema(
     summary="Reset Password",
     description="Resets the user's password using the reset token received after OTP verification.",
-
     request=ResetPasswordSerializer,
-
     examples=[
         OpenApiExample(
-            "Reset Password",
-            summary="Reset password with reset token",
+            "Valid Reset Password",
+            summary="Successful password reset",
             value={
                 "reset_token": "example-reset-token",
                 "new_password": "NewPassword@123",
-                "confirm_password": "NewPassword@123",
+                "confirm_password": "NewPassword@123"
+            },
+            request_only=True,
+        ),
+        OpenApiExample(
+            "Invalid Reset Token",
+            summary="Failed password reset",
+            value={
+                "reset_token": "invalid-reset-token",
+                "new_password": "NewPassword@123",
+                "confirm_password": "NewPassword@123"
             },
             request_only=True,
         ),
     ],
-
     responses={
         200: OpenApiResponse(
-            description="Password reset successfully."
+            response=OpenApiTypes.OBJECT,
+            description="Password reset successfully.",
+            examples=[
+                OpenApiExample(
+                    "Password Reset Success",
+                    value={
+                        "message": "Password reset successfully."
+                    },
+                    response_only=True,
+                ),
+            ],
         ),
         400: OpenApiResponse(
-            description="Invalid reset token or passwords do not match."
+            response=OpenApiTypes.OBJECT,
+            description="Invalid reset token or passwords do not match.",
+            examples=[
+                OpenApiExample(
+                    "Invalid Reset Token",
+                    value={
+                        "error": "Invalid or expired reset token."
+                    },
+                    response_only=True,
+                ),
+                OpenApiExample(
+                    "Password Validation Error",
+                    value={
+                        "new_password": [
+                            "Passwords do not match."
+                        ]
+                    },
+                    response_only=True,
+                ),
+            ],
         ),
     },
 )
@@ -598,25 +751,74 @@ class ResetPasswordApi(APIView):
     request=ChangePasswordSerializer,
     examples=[
         OpenApiExample(
-            "Change Password",
-            summary="Change user's password",
+            "Valid Password Change",
+            summary="Successful password change",
             value={
                 "current_password": "OldPassword@123",
                 "new_password": "NewPassword@123",
-                "confirm_password": "NewPassword@123",
+                "confirm_password": "NewPassword@123"
+            },
+            request_only=True,
+        ),
+        OpenApiExample(
+            "Incorrect Current Password",
+            summary="Failed password change",
+            value={
+                "current_password": "WrongPassword@123",
+                "new_password": "NewPassword@123",
+                "confirm_password": "NewPassword@123"
             },
             request_only=True,
         ),
     ],
     responses={
         200: OpenApiResponse(
-            description="Password changed successfully."
+            response=OpenApiTypes.OBJECT,
+            description="Password changed successfully.",
+            examples=[
+                OpenApiExample(
+                    "Password Change Success",
+                    value={
+                        "message": "Password changed successfuly."
+                    },
+                    response_only=True,
+                ),
+            ],
         ),
         400: OpenApiResponse(
-            description="Invalid current password or passwords do not match."
+            response=OpenApiTypes.OBJECT,
+            description="Invalid current password or passwords do not match.",
+            examples=[
+                OpenApiExample(
+                    "Incorrect Current Password",
+                    value={
+                        "error": "Current Password is incorrect."
+                    },
+                    response_only=True,
+                ),
+                OpenApiExample(
+                    "Password Validation Error",
+                    value={
+                        "new_password": [
+                            "Passwords do not match."
+                        ]
+                    },
+                    response_only=True,
+                ),
+            ],
         ),
         401: OpenApiResponse(
-            description="Authentication credentials were not provided or are invalid."
+            response=OpenApiTypes.OBJECT,
+            description="Authentication credentials were not provided or are invalid.",
+            examples=[
+                OpenApiExample(
+                    "Unauthorized",
+                    value={
+                        "detail": "Authentication credentials were not provided."
+                    },
+                    response_only=True,
+                ),
+            ],
         ),
     },
 )
@@ -666,10 +868,41 @@ class ChangePasswordApi(APIView):
     ),
     responses={
         200: OpenApiResponse(
-            description="JWT tokens generated successfully."
+            response=OpenApiTypes.OBJECT,
+            description="JWT tokens generated successfully.",
+            examples=[
+                OpenApiExample(
+                    "Google Login Without Business",
+                    value={
+                        "refresh": "eyJhbGciOiJIUzI1NiIs...",
+                        "access": "eyJhbGciOiJIUzI1NiIs...",
+                        "has_business": False
+                    },
+                    response_only=True,
+                ),
+                OpenApiExample(
+                    "Google Login With Business",
+                    value={
+                        "refresh": "eyJhbGciOiJIUzI1NiIs...",
+                        "access": "eyJhbGciOiJIUzI1NiIs...",
+                        "has_business": True
+                    },
+                    response_only=True,
+                ),
+            ],
         ),
         401: OpenApiResponse(
-            description="Google authentication failed."
+            response=OpenApiTypes.OBJECT,
+            description="Google authentication failed.",
+            examples=[
+                OpenApiExample(
+                    "Google Authentication Failed",
+                    value={
+                        "error": "Google authentication failed."
+                    },
+                    response_only=True,
+                ),
+            ],
         ),
     },
     tags=["Authentication"],
@@ -698,31 +931,88 @@ class GoogleJWTApi(APIView):
 @extend_schema(
     summary="Register Business",
     description="Creates business details for the authenticated business owner.",
-
     request=BusinessRegistrationSerializer,
-
     examples=[
         OpenApiExample(
-            "Business Registration",
-            summary="Register a business",
+            "Valid Business Registration",
+            summary="Successful business registration",
             value={
                 "business_name": "Kosh Technologies",
                 "business_type": "Retail",
-                "city": "Ghaziabad",
+                "city": "Ghaziabad"
+            },
+            request_only=True,
+        ),
+        OpenApiExample(
+            "Invalid Business Registration",
+            summary="Failed business registration",
+            value={
+                "business_name": "",
+                "business_type": "Retail",
+                "city": "Ghaziabad"
             },
             request_only=True,
         ),
     ],
-
     responses={
         201: OpenApiResponse(
-            description="Business registered successfully."
+            response=OpenApiTypes.OBJECT,
+            description="Business registered successfully.",
+            examples=[
+                OpenApiExample(
+                    "Business Registration Success",
+                    value={
+                        "success": True,
+                        "message": "Business registered successfully.",
+                        "data": {
+                            "id": 1,
+                            "business_name": "Kosh Technologies",
+                            "business_type": "Retail",
+                            "city": "Ghaziabad"
+                        }
+                    },
+                    response_only=True,
+                ),
+            ],
         ),
         400: OpenApiResponse(
-            description="Invalid business details."
+            response=OpenApiTypes.OBJECT,
+            description="Invalid business details or business already registered.",
+            examples=[
+                OpenApiExample(
+                    "Business Already Registered",
+                    value={
+                        "success": False,
+                        "message": "Business is already registered."
+                    },
+                    response_only=True,
+                ),
+                OpenApiExample(
+                    "Invalid Business Details",
+                    value={
+                        "success": False,
+                        "errors": {
+                            "business_name": [
+                                "This field may not be blank."
+                            ]
+                        }
+                    },
+                    response_only=True,
+                ),
+            ],
         ),
         401: OpenApiResponse(
-            description="Authentication credentials were not provided or are invalid."
+            response=OpenApiTypes.OBJECT,
+            description="Authentication credentials were not provided or are invalid.",
+            examples=[
+                OpenApiExample(
+                    "Unauthorized",
+                    value={
+                        "detail": "Authentication credentials were not provided."
+                    },
+                    response_only=True,
+                ),
+            ],
         ),
     },
 )
