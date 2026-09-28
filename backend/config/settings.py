@@ -56,6 +56,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'drf_spectacular',
     'accounts',
+    'accounts.apps.AccountsConfig',
     'rest_framework_simplejwt.token_blacklist',
     'django.contrib.sites',
     'allauth',
