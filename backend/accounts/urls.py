@@ -16,4 +16,5 @@ urlpatterns = [
 
   path('google/jwt/',views.GoogleJWTApi.as_view(),name='google_jwt'),
   path("business/register/",views.BusinessRegistration.as_view(),name="business-register"),
+  path("verify-registration-otp/",views.VerifyRegistrationOTPApi.as_view(), name="verify_registration_otp",),
 ]
