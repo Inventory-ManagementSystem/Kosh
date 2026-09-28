@@ -2,6 +2,7 @@ from django.contrib.auth.models import User
 from rest_framework import serializers
 from django.contrib.auth import authenticate
 from rest_framework_simplejwt.tokens import RefreshToken
+from .models import Business
 
 
 class RegisterSerializer(serializers.ModelSerializer):
@@ -62,5 +63,15 @@ class LoginSerializer(serializers.Serializer):
     return{
       'refresh': str(refresh),
       'access': str(refresh.access_token),
+      'user':user,
     }
 
+
+class BusinessRegistrationSerializer(serializers.ModelSerializer):
+  class Meta:
+    model = Business
+    fields = ["business_name","business_type","city",]
+  def validate_business_name(self, value):
+    if not value.strip():
+      raise serializers.ValidationError("Business name cannot be empty.")
+    return value

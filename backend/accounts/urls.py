@@ -10,4 +10,5 @@ urlpatterns = [
   path('profile/',views.ProfileApi.as_view(),name='profile_api'),
   path('logout/',views.LogoutApi.as_view(),name='logout_api'),
   path('google/jwt/',views.GoogleJWTApi.as_view(),name='google_jwt'),
+  path("business/register/",views.BusinessRegistration.as_view(),name="business-register"),
 ]
