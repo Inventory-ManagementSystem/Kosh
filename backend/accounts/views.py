@@ -2,6 +2,7 @@ from django.shortcuts import render
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
+from .models import Business
 from .serializers import (
   RegisterSerializer,
   LoginSerializer,
@@ -43,14 +44,22 @@ class LoginApi(APIView):
   def post(self,request):
     serializer = LoginSerializer(data=request.data)
     if serializer.is_valid():
-      return Response(
-        serializer.validated_data,
-        status=status.HTTP_200_OK
+      data=serializer.validated_data
+      user= data["user"]
+      has_business = Business.objects.filter(owner=user).exists()
+      return Response({
+        "success": True,
+        "message": "Login successful.",
+        "refresh": data["refresh"],
+        "access": data["access"],
+        "has_business": has_business,
+        },status=status.HTTP_200_OK
       )
 
-    return Response(
-      serializer.errors,
-      status=status.HTTP_400_BAD_REQUEST
+    return Response({
+      "success": False,
+      "errors": serializer.errors
+      },status=status.HTTP_400_BAD_REQUEST
     )
 
 
@@ -354,10 +363,43 @@ class GoogleJWTApi(APIView):
       )
 
     refresh = RefreshToken.for_user(user)
+    has_business = Business.objects.filter(owner=request.user).exists()
     refresh["token_version"] = user.profile.token_version
 
     return Response({
       "refresh": str(refresh),
-      "access": str(refresh.access_token)
+      "access": str(refresh.access_token),
+      "has_business": has_business,
       },status=status.HTTP_200_OK
+    )
+
+
+class BusinessRegistration(APIView):
+  permission_classes = [IsAuthenticated]
+  def post(self, request):
+    if Business.objects.filter(owner=request.user).exists():
+      return Response({
+        "success": False,
+        "message": "Business is already registered."
+        },status=status.HTTP_400_BAD_REQUEST
+      )
+    serializer = BusinessRegistrationSerializer(data=request.data)
+    if serializer.is_valid():
+      business = serializer.save(owner=request.user)
+      return Response({
+        "success": True,
+        "message": "Business registered successfully.",
+        "data": {
+          "id": business.id,
+          "business_name": business.business_name,
+          "business_type": business.business_type,
+          "city": business.city
+          }
+        },status=status.HTTP_201_CREATED
+      )
+
+    return Response({
+      "success": False,
+      "errors": serializer.errors
+      },status=status.HTTP_400_BAD_REQUEST
     )
