@@ -1,5 +1,6 @@
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.exceptions import AuthenticationFailed
+from drf_spectacular.extensions import OpenApiAuthenticationExtension
 
 class TokenVersionJWTAuthentication(JWTAuthentication):
 
@@ -13,3 +14,14 @@ class TokenVersionJWTAuthentication(JWTAuthentication):
             raise AuthenticationFailed("Token is no longer valid.")
 
         return user
+
+
+class TokenVersionJWTAuthenticationScheme(OpenApiAuthenticationExtension):
+    target_class = "accounts.authentication.TokenVersionJWTAuthentication"
+    name = "BearerAuth"
+    def get_security_definition(self, auto_schema):
+        return {
+            "type": "http",
+            "scheme": "bearer",
+            "bearerFormat": "JWT",
+        }
