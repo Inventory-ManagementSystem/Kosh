@@ -9,5 +9,10 @@ urlpatterns = [
   path('token/refresh/',TokenRefreshView.as_view(),name='token_refresh'),
   path('profile/',views.ProfileApi.as_view(),name='profile_api'),
   path('logout/',views.LogoutApi.as_view(),name='logout_api'),
+  path('forgot-password/', views.ForgotPasswordApi.as_view(), name="forgot-password"),
+  path('verify-reset-otp/', views.VerifyResetOTPApi.as_view(), name="verify-reset-otp"),
+  path('reset-password/', views.ResetPasswordApi.as_view(), name="reset-password"),
+  path('change-password/', views.ChangePasswordApi.as_view(), name="change-password"),
+
   path('google/jwt/',views.GoogleJWTApi.as_view(),name='google_jwt'),
 ]
