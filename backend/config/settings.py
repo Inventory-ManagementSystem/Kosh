@@ -217,3 +217,10 @@ CORS_ALLOWED_ORIGINS=[
     "https://www.koshh.me",
     "https://kosh-frontend-three.vercel.app",
 ]
+
+
+CSRF_TRUSTED_ORIGINS = [
+    "https://kosh.dev-sushant.me",
+]
+
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
