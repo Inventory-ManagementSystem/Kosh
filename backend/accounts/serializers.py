@@ -41,13 +41,14 @@ class RegisterSerializer(serializers.ModelSerializer):
       raise serializers.ValidationError("Email already exists")
     return value
 
-  def create(self,validated_data):
-    user = User.objects.create_user(
-      username = validated_data['username'],
-      email = validated_data['email'],
-      password = validated_data['password'],
-    ) 
-    return user
+class VerifyRegistrationOTPSerializer(serializers.Serializer):
+  email = serializers.EmailField(required=True)
+
+  otp = serializers.CharField(
+      required=True,
+      min_length=6,
+      max_length=6
+  )
   
   
 

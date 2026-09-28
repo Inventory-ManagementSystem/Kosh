@@ -11,6 +11,7 @@ from .serializers import (
   ResetPasswordSerializer,
   ChangePasswordSerializer,
   BusinessRegistrationSerializer,
+  VerifyRegistrationOTPSerializer,
 )
 from rest_framework.permissions import IsAuthenticated
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -23,6 +24,8 @@ from rest_framework_simplejwt.token_blacklist.models import (
 from django.contrib.auth.models import User
 from django.core.mail import send_mail
 from django.core.cache import cache
+from django.contrib.auth.hashers import make_password
+from django.db import IntegrityError
 
 from drf_spectacular.utils import (extend_schema,OpenApiResponse,OpenApiExample)
 from drf_spectacular.types import OpenApiTypes
@@ -30,12 +33,17 @@ from drf_spectacular.types import OpenApiTypes
 
 @extend_schema(
     summary="Register User",
+    description=(
+        "Validates the registration details and sends a 6-digit OTP "
+        "to the provided email address. The user account is created "
+        "only after the OTP is successfully verified."
+    ),
     request=RegisterSerializer,
     examples=[
         OpenApiExample(
             "Valid Registration",
-            summary="Successful registration",
-            description="Use this data to test a successful user registration.",
+            summary="Request registration OTP",
+            description="Use this data to request an email verification OTP.",
             value={
                 "username": "john_doe",
                 "email": "john@example.com",
@@ -46,7 +54,7 @@ from drf_spectacular.types import OpenApiTypes
         OpenApiExample(
             "Duplicate Username",
             summary="Username already exists",
-            description="Use this data after john_doe has already been registered.",
+            description="Use this data when john_doe is already registered.",
             value={
                 "username": "john_doe",
                 "email": "newuser@example.com",
@@ -56,14 +64,14 @@ from drf_spectacular.types import OpenApiTypes
         ),
     ],
     responses={
-        201: OpenApiResponse(
+        200: OpenApiResponse(
             response=OpenApiTypes.OBJECT,
-            description="User registered successfully.",
+            description="Registration OTP sent successfully.",
             examples=[
                 OpenApiExample(
-                    "Registration Success",
+                    "OTP Sent",
                     value={
-                        "message": "User Registered Successfully"
+                        "message": "OTP has been sent to your email."
                     },
                     response_only=True,
                 ),
@@ -84,22 +92,275 @@ from drf_spectacular.types import OpenApiTypes
                 ),
             ],
         ),
+        429: OpenApiResponse(
+            response=OpenApiTypes.OBJECT,
+            description="OTP resend cooldown is active.",
+            examples=[
+                OpenApiExample(
+                    "Cooldown Active",
+                    value={
+                        "error": "Please wait before requesting another OTP.",
+                        "cooldown_remaining": 43
+                    },
+                    response_only=True,
+                ),
+            ],
+        ),
     },
 )
 class RegisterApi(APIView):
-  def post(self,request):
-    serializer = RegisterSerializer(data=request.data)
-    if serializer.is_valid():
-      serializer.save()
-      return Response({
-        'message': 'User Registered Successfully'
-      },
-      status=status.HTTP_201_CREATED)
+    def post(self, request):
+        serializer = RegisterSerializer(data=request.data)
 
-    return Response(
-      serializer.errors,
-      status = status.HTTP_400_BAD_REQUEST
-    )
+        if not serializer.is_valid():
+            return Response(
+                serializer.errors,
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        email = serializer.validated_data["email"]
+        username = serializer.validated_data["username"]
+        password = serializer.validated_data["password"]
+
+        cooldown_key = f"registration_resend:{email}"
+        otp_key = f"registration_otp:{email}"
+        data_key = f"registration_data:{email}"
+
+        if cache.get(cooldown_key):
+            ttl = cache.ttl(cooldown_key)
+
+            return Response(
+                {
+                    "error": "Please wait before requesting another OTP.",
+                    "cooldown_remaining": max(ttl, 0)
+                },
+                status=status.HTTP_429_TOO_MANY_REQUESTS
+            )
+
+        otp = str(secrets.randbelow(900000) + 100000)
+
+        cache.set(
+            otp_key,
+            otp,
+            timeout=300
+        )
+
+        cache.set(
+            data_key,
+            {
+                "username": username,
+                "email": email,
+                "password": make_password(password),
+            },
+            timeout=300
+        )
+
+        cache.set(
+            cooldown_key,
+            True,
+            timeout=60
+        )
+
+        send_mail(
+            "Kosh Email Verification OTP",
+            (
+                f"Your Kosh email verification OTP is {otp}. "
+                "This OTP is valid for 5 minutes."
+            ),
+            None,
+            [email],
+        )
+
+        return Response(
+            {
+                "message": "OTP has been sent to your email."
+            },
+            status=status.HTTP_200_OK
+        )
+
+@extend_schema(
+    summary="Verify Registration OTP",
+    description=(
+        "Verifies the 6-digit OTP sent to the user's email during "
+        "registration. The user account is created only after the OTP "
+        "is successfully verified. A maximum of 5 incorrect attempts "
+        "are allowed."
+    ),
+    request=VerifyRegistrationOTPSerializer,
+    examples=[
+        OpenApiExample(
+            "Valid OTP",
+            summary="Verify registration",
+            description="Use the OTP received on the registered email.",
+            value={
+                "email": "john@example.com",
+                "otp": "123456"
+            },
+            request_only=True,
+        ),
+        OpenApiExample(
+            "Invalid OTP",
+            summary="Incorrect OTP",
+            description="Use an incorrect OTP to test the attempt limit.",
+            value={
+                "email": "john@example.com",
+                "otp": "654321"
+            },
+            request_only=True,
+        ),
+    ],
+    responses={
+        201: OpenApiResponse(
+            response=OpenApiTypes.OBJECT,
+            description="Email verified and user registered successfully.",
+            examples=[
+                OpenApiExample(
+                    "Registration Success",
+                    value={
+                        "message": (
+                            "Email verified and registration successful."
+                        )
+                    },
+                    response_only=True,
+                ),
+            ],
+        ),
+        400: OpenApiResponse(
+            response=OpenApiTypes.OBJECT,
+            description="Invalid or expired OTP, or registration conflict.",
+            examples=[
+                OpenApiExample(
+                    "Invalid OTP",
+                    value={
+                        "error": "Invalid OTP.",
+                        "remaining_attempts": 4
+                    },
+                    response_only=True,
+                ),
+                OpenApiExample(
+                    "Expired OTP",
+                    value={
+                        "error": "OTP has expired. Please register again."
+                    },
+                    response_only=True,
+                ),
+                OpenApiExample(
+                    "Registration Conflict",
+                    value={
+                        "error": "Username or email already exists."
+                    },
+                    response_only=True,
+                ),
+            ],
+        ),
+        429: OpenApiResponse(
+            response=OpenApiTypes.OBJECT,
+            description="Maximum OTP verification attempts exceeded.",
+            examples=[
+                OpenApiExample(
+                    "Too Many Attempts",
+                    value={
+                        "error": (
+                            "Too many incorrect OTP attempts. "
+                            "Please register again."
+                        )
+                    },
+                    response_only=True,
+                ),
+            ],
+        ),
+    },
+)
+
+class VerifyRegistrationOTPApi(APIView):
+
+    def post(self, request):
+        serializer = VerifyRegistrationOTPSerializer(data=request.data)
+
+        if not serializer.is_valid():
+            return Response(
+                serializer.errors,
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        email = serializer.validated_data["email"]
+        submitted_otp = serializer.validated_data["otp"]
+
+        otp_key = f"registration_otp:{email}"
+        data_key = f"registration_data:{email}"
+        attempts_key = f"registration_attempts:{email}"
+
+        stored_otp = cache.get(otp_key)
+        registration_data = cache.get(data_key)
+
+        if not stored_otp or not registration_data:
+            return Response(
+                {
+                    "error": "OTP has expired. Please register again."
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        attempts = cache.get(attempts_key, 0)
+
+        if attempts >= 5:
+            cache.delete(otp_key)
+            cache.delete(data_key)
+            cache.delete(attempts_key)
+
+            return Response(
+                {
+                    "error": (
+                        "Too many incorrect OTP attempts. "
+                        "Please register again."
+                    )
+                },
+                status=status.HTTP_429_TOO_MANY_REQUESTS
+            )
+
+        if submitted_otp != stored_otp:
+            attempts += 1
+
+            cache.set(
+                attempts_key,
+                attempts,
+                timeout=300
+            )
+
+            return Response(
+                {
+                    "error": "Invalid OTP.",
+                    "remaining_attempts": 5 - attempts
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            user = User.objects.create(
+                username=registration_data["username"],
+                email=registration_data["email"],
+                password=registration_data["password"],
+            )
+
+        except IntegrityError:
+            return Response(
+                {
+                    "error": "Username or email already exists."
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        cache.delete(otp_key)
+        cache.delete(data_key)
+        cache.delete(attempts_key)
+        cache.delete(f"registration_resend:{email}")
+
+        return Response(
+            {
+                "message": "Email verified and registration successful."
+            },
+            status=status.HTTP_201_CREATED
+        )
 
 
 @extend_schema(
