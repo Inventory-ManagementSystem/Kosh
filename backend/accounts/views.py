@@ -10,6 +10,7 @@ from .serializers import (
   VerifyResetOTPSerializer,
   ResetPasswordSerializer,
   ChangePasswordSerializer,
+  BusinessRegistrationSerializer,
 )
 from rest_framework.permissions import IsAuthenticated
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -23,7 +24,74 @@ from django.contrib.auth.models import User
 from django.core.mail import send_mail
 from django.core.cache import cache
 
+from drf_spectacular.utils import (extend_schema,OpenApiResponse,OpenApiExample)
 
+
+@extend_schema(
+    summary="Register User",
+    request=RegisterSerializer,
+    examples=[
+        OpenApiExample(
+            "Valid Registration",
+            summary="Successful registration",
+            description="Use this data to test a successful user registration.",
+            value={
+                "username": "john_doe",
+                "email": "john@example.com",
+                "password": "John@1234"
+            },
+            request_only=True,
+        ),
+        OpenApiExample(
+            "Another Valid User",
+            summary="Second test user",
+            description="Another valid registration payload.",
+            value={
+                "username": "alice_smith",
+                "email": "alice@example.com",
+                "password": "Alice@1234"
+            },
+            request_only=True,
+        ),
+        OpenApiExample(
+            "Duplicate Username",
+            summary="Test duplicate username",
+            description="Use this after john_doe has already been registered.",
+            value={
+                "username": "john_doe",
+                "email": "newuser@example.com",
+                "password": "NewUser@1234"
+            },
+            request_only=True,
+        ),
+    ],
+    responses={
+        201: OpenApiResponse(
+            description="User registered successfully.",
+            examples=[
+                OpenApiExample(
+                    "Registration Success",
+                    value={
+                        "message": "User Registered Successfully"
+                    },
+                )
+            ],
+        ),
+        400: OpenApiResponse(
+            description="Validation error.",
+            examples=[
+                OpenApiExample(
+                    "Validation Error",
+                    value={
+                        "username": [
+                            "Username already exists."
+                        ]
+                    },
+                )
+            ],
+        ),
+    },
+)
 class RegisterApi(APIView):
   def post(self,request):
     serializer = RegisterSerializer(data=request.data)
@@ -40,6 +108,63 @@ class RegisterApi(APIView):
     )
 
 
+@extend_schema(
+    summary="Login User",
+    request=LoginSerializer,
+    examples=[
+        OpenApiExample(
+            "Login with Email",
+            summary="Login using email",
+            value={
+                "identifier": "john@example.com",
+                "password": "John@1234",
+            },
+            request_only=True,
+        ),
+        OpenApiExample(
+            "Login with Username",
+            summary="Login using username",
+            value={
+                "identifier": "john_doe",
+                "password": "John@1234",
+            },
+            request_only=True,
+        ),
+    ],
+    responses={
+        200: OpenApiResponse(
+            description="Login successful.",
+            examples=[
+                OpenApiExample(
+                    "Login Success",
+                    value={
+                        "success": True,
+                        "message": "Login successful.",
+                        "refresh": "eyJhbGciOiJIUzI1NiIs...",
+                        "access": "eyJhbGciOiJIUzI1NiIs...",
+                        "has_business": False,
+                    },
+                )
+            ],
+        ),
+        400: OpenApiResponse(
+            description="Invalid credentials.",
+            examples=[
+                OpenApiExample(
+                    "Invalid Credentials",
+                    value={
+                        "success": False,
+                        "errors": {
+                            "non_field_errors": [
+                                "Invalid Username Or Password."
+                            ]
+                        }
+                    },
+                )
+            ],
+        ),
+    },
+)
 class LoginApi(APIView):
   def post(self,request):
     serializer = LoginSerializer(data=request.data)
@@ -63,7 +188,35 @@ class LoginApi(APIView):
     )
 
 
-
+@extend_schema(
+    summary="Get User Profile",
+    description="Retrieve the profile information of the currently authenticated user.",
+    responses={
+        200: OpenApiResponse(
+            description="Profile retrieved successfully.",
+            examples=[
+                OpenApiExample(
+                    "Profile Success",
+                    value={
+                        "username": "john_doe",
+                        "email": "john@example.com",
+                    },
+                ),
+            ],
+        ),
+        401: OpenApiResponse(
+            description="Authentication credentials were not provided or are invalid.",
+            examples=[
+                OpenApiExample(
+                    "Unauthorized",
+                    value={
+                        "detail": "Authentication credentials were not provided."
+                    },
+                ),
+            ],
+        ),
+    },
+)
 class ProfileApi(APIView):
   permission_classes = [IsAuthenticated]
   def get(self,request):
@@ -75,6 +228,30 @@ class ProfileApi(APIView):
     }, status=status.HTTP_200_OK)
 
 
+
+@extend_schema(
+    summary="Logout User",
+    description="Logs out the currently authenticated user.",
+    responses={
+        200: OpenApiResponse(
+            description="Logout successful.",
+            examples=[
+                OpenApiExample(
+                    "Logout Success",
+                    value={
+                        "message": "Logout successful."
+                    },
+                ),
+            ],
+        ),
+        400: OpenApiResponse(
+            description="Invalid logout request.",
+        ),
+        401: OpenApiResponse(
+            description="Authentication credentials were not provided or are invalid.",
+        ),
+    },
+)
 class LogoutApi(APIView):
   permission_classes = [IsAuthenticated]
   def post(self, request):
@@ -98,6 +275,52 @@ class LogoutApi(APIView):
         },status=status.HTTP_400_BAD_REQUEST
       )
 
+
+@extend_schema(
+    summary="Request Password Reset",
+    description="Sends a password reset OTP to the user's registered email address.",
+
+    request=ForgotPasswordSerializer,
+
+    examples=[
+        OpenApiExample(
+            "Forgot Password Request",
+            summary="Request password reset",
+            value={
+                "email": "john@example.com"
+            },
+            request_only=True,
+        ),
+    ],
+
+    responses={
+        200: OpenApiResponse(
+            description="Password reset OTP sent successfully.",
+            examples=[
+                OpenApiExample(
+                    "OTP Sent",
+                    value={
+                        "message": "OTP sent successfully."
+                    },
+                ),
+            ],
+        ),
+
+        400: OpenApiResponse(
+            description="Invalid request or email address.",
+            examples=[
+                OpenApiExample(
+                    "Invalid Email",
+                    value={
+                        "email": [
+                            "User with this email does not exist."
+                        ]
+                    },
+                ),
+            ],
+        ),
+    },
+)
 class ForgotPasswordApi(APIView):
 
     def post(self, request):
@@ -161,6 +384,30 @@ class ForgotPasswordApi(APIView):
             status=status.HTTP_200_OK
         )
 
+
+@extend_schema(
+    summary="Verify Password Reset OTP",
+    description="Verifies the OTP sent to the user's email during the password reset process.",
+    request=VerifyResetOTPSerializer,
+    examples=[
+        OpenApiExample(
+            "Verify OTP",
+            value={
+                "email": "john@example.com",
+                "otp": "123456"
+            },
+            request_only=True,
+        ),
+    ],
+    responses={
+        200: OpenApiResponse(
+            description="OTP verified successfully."
+        ),
+        400: OpenApiResponse(
+            description="Invalid or expired OTP."
+        ),
+    },
+)
 class VerifyResetOTPApi(APIView):
 
     def post(self, request):
@@ -264,6 +511,35 @@ class VerifyResetOTPApi(APIView):
             status=status.HTTP_200_OK
         )
 
+
+@extend_schema(
+    summary="Reset Password",
+    description="Resets the user's password using the reset token received after OTP verification.",
+
+    request=ResetPasswordSerializer,
+
+    examples=[
+        OpenApiExample(
+            "Reset Password",
+            summary="Reset password with reset token",
+            value={
+                "reset_token": "example-reset-token",
+                "new_password": "NewPassword@123",
+                "confirm_password": "NewPassword@123",
+            },
+            request_only=True,
+        ),
+    ],
+
+    responses={
+        200: OpenApiResponse(
+            description="Password reset successfully."
+        ),
+        400: OpenApiResponse(
+            description="Invalid reset token or passwords do not match."
+        ),
+    },
+)
 class ResetPasswordApi(APIView):
 
     def post(self, request):
@@ -315,6 +591,35 @@ class ResetPasswordApi(APIView):
             status=status.HTTP_200_OK
         )
 
+
+@extend_schema(
+    summary="Change Password",
+    description="Changes the password of the currently authenticated user.",
+    request=ChangePasswordSerializer,
+    examples=[
+        OpenApiExample(
+            "Change Password",
+            summary="Change user's password",
+            value={
+                "current_password": "OldPassword@123",
+                "new_password": "NewPassword@123",
+                "confirm_password": "NewPassword@123",
+            },
+            request_only=True,
+        ),
+    ],
+    responses={
+        200: OpenApiResponse(
+            description="Password changed successfully."
+        ),
+        400: OpenApiResponse(
+            description="Invalid current password or passwords do not match."
+        ),
+        401: OpenApiResponse(
+            description="Authentication credentials were not provided or are invalid."
+        ),
+    },
+)
 class ChangePasswordApi(APIView):
 
     permission_classes=[ IsAuthenticated]
@@ -353,7 +658,22 @@ class ChangePasswordApi(APIView):
         }, status=status.HTTP_200_OK)
 
 
-
+@extend_schema(
+    summary="Generate JWT for Google User",
+    description=(
+        "Generates access and refresh JWT tokens for a user "
+        "authenticated through Google OAuth."
+    ),
+    responses={
+        200: OpenApiResponse(
+            description="JWT tokens generated successfully."
+        ),
+        401: OpenApiResponse(
+            description="Google authentication failed."
+        ),
+    },
+    tags=["Authentication"],
+)
 class GoogleJWTApi(APIView):
   def get(self, request):
     user = request.user
@@ -374,6 +694,38 @@ class GoogleJWTApi(APIView):
     )
 
 
+
+@extend_schema(
+    summary="Register Business",
+    description="Creates business details for the authenticated business owner.",
+
+    request=BusinessRegistrationSerializer,
+
+    examples=[
+        OpenApiExample(
+            "Business Registration",
+            summary="Register a business",
+            value={
+                "business_name": "Kosh Technologies",
+                "business_type": "Retail",
+                "city": "Ghaziabad",
+            },
+            request_only=True,
+        ),
+    ],
+
+    responses={
+        201: OpenApiResponse(
+            description="Business registered successfully."
+        ),
+        400: OpenApiResponse(
+            description="Invalid business details."
+        ),
+        401: OpenApiResponse(
+            description="Authentication credentials were not provided or are invalid."
+        ),
+    },
+)
 class BusinessRegistration(APIView):
   permission_classes = [IsAuthenticated]
   def post(self, request):
