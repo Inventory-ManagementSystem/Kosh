@@ -26,7 +26,7 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     path('accounts/',include("accounts.urls")),
     path('accounts/',include('allauth.urls')),
-    path('api/health/', HealthAPIView.as_view(), name='health'),
+    path('/', HealthAPIView.as_view(), name='health'),
     path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
     path('api/docs/',SpectacularSwaggerView.as_view(url_name='schema'),name='swagger-ui'),
 ]
