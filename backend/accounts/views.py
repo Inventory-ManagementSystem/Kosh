@@ -32,6 +32,17 @@ from drf_spectacular.utils import (extend_schema,OpenApiResponse,OpenApiExample)
 from drf_spectacular.types import OpenApiTypes
 
 
+from .throttles import (
+    LoginRateThrottle,
+    RegisterRateThrottle,
+    OTPRateThrottle,
+    ForgotPasswordRateThrottle,
+    VerifyOTPThrottle,
+    OAuthRateThrottle,
+    BusinessRegistrationThrottle,
+)
+from rest_framework.throttling import (UserRateThrottle)
+
 @extend_schema(
     summary="Register User",
     description=(
@@ -110,6 +121,7 @@ from drf_spectacular.types import OpenApiTypes
     },
 )
 class RegisterApi(APIView):
+    throttle_classes=[RegisterRateThrottle]
     def post(self, request):
         serializer = RegisterSerializer(data=request.data)
 
@@ -274,7 +286,7 @@ class RegisterApi(APIView):
 )
 
 class VerifyRegistrationOTPApi(APIView):
-
+    throttle_classes=[VerifyOTPThrottle]
     def post(self, request):
         serializer = VerifyRegistrationOTPSerializer(data=request.data)
 
@@ -435,6 +447,7 @@ class VerifyRegistrationOTPApi(APIView):
     },
 )
 class LoginApi(APIView):
+  throttle_classes=[LoginRateThrottle]
   def post(self,request):
     serializer = LoginSerializer(data=request.data)
     if serializer.is_valid():
@@ -493,6 +506,7 @@ class LoginApi(APIView):
 )
 class ProfileApi(APIView):
   permission_classes = [IsAuthenticated]
+  throttle_classes=[UserRateThrottle]
   def get(self,request):
     user =request.user
     return Response({
@@ -558,6 +572,7 @@ class ProfileApi(APIView):
 )
 class LogoutApi(APIView):
   permission_classes = [IsAuthenticated]
+  throttle_classes=[UserRateThrottle]
   def post(self, request):
     refresh_token = request.data.get('refresh')
     if not refresh_token:
@@ -649,7 +664,7 @@ class LogoutApi(APIView):
     },
 )
 class ForgotPasswordApi(APIView):
-
+    throttle_classes=[ForgotPasswordRateThrottle]
     def post(self, request):
 
         serializer = ForgotPasswordSerializer(data=request.data)
@@ -789,7 +804,7 @@ class ForgotPasswordApi(APIView):
     },
 )
 class VerifyResetOTPApi(APIView):
-
+    throttle_classes=[VerifyOTPThrottle]
     def post(self, request):
 
         serializer = VerifyResetOTPSerializer(data=request.data)
@@ -1171,6 +1186,7 @@ class ChangePasswordApi(APIView):
     tags=["Authentication"],
 )
 class GoogleJWTApi(APIView):
+  throttle_classes=[OAuthRateThrottle]
   def get(self, request):
     user = request.user
     if not user.is_authenticated:
@@ -1281,6 +1297,7 @@ class GoogleJWTApi(APIView):
 )
 class BusinessRegistration(APIView):
   permission_classes = [IsAuthenticated]
+  throttle_classes=[BusinessRegistrationThrottle]
   def post(self, request):
     if Business.objects.filter(owner=request.user).exists():
       return Response({
