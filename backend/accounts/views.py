@@ -12,6 +12,7 @@ from .serializers import (
   ChangePasswordSerializer,
   BusinessRegistrationSerializer,
   VerifyRegistrationOTPSerializer,
+  LogoutSerializer,
 )
 from rest_framework.permissions import IsAuthenticated
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -504,7 +505,8 @@ class ProfileApi(APIView):
 
 @extend_schema(
     summary="Logout User",
-    description="Logs out the currently authenticated user.",
+    description="Logs out the currently authenticated user using the refresh token.",
+    request=LogoutSerializer,
     responses={
         200: OpenApiResponse(
             response=OpenApiTypes.OBJECT,

@@ -153,3 +153,6 @@ class ChangePasswordSerializer(serializers.Serializer):
          })
 
       return data
+
+class LogoutSerializer(serializers.Serializer):
+    refresh = serializers.CharField(required=True)
