@@ -180,6 +180,15 @@ REST_FRAMEWORK = {
         "accounts.authentication.TokenVersionJWTAuthentication",
     ),
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    
+    "DEFAULT_THROTTLE_CLASSES": [
+        "rest_framework.throttling.AnonRateThrottle",
+        "rest_framework.throttling.UserRateThrottle",
+    ],
+    "DEFAULT_THROTTLE_RATES": {
+        "anon": "20/min",
+        "user": "100/min",
+    },
 }
 SPECTACULAR_SETTINGS = {
     "TITLE": "Kosh API",
@@ -210,7 +219,7 @@ AUTHENTICATION_BACKENDS ={
     'allauth.account.auth_backends.AuthenticationBackend',
 }
 
-LOGIN_REDIRECT_URL='/'
+LOGIN_REDIRECT_URL = "https://koshh.me/oauth/callback"
 LOGOUT_REDIRECT_URL='/'
 
 CORS_ALLOWED_ORIGINS=[
