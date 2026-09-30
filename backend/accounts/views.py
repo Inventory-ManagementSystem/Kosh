@@ -16,6 +16,8 @@ from .serializers import (
 )
 from rest_framework.permissions import IsAuthenticated
 from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.serializers import TokenRefreshSerializer
+from rest_framework_simplejwt.exceptions import TokenError, InvalidToken
 import secrets
 from rest_framework_simplejwt.token_blacklist.models import (
     OutstandingToken,
@@ -27,6 +29,7 @@ from django.core.mail import send_mail
 from django.core.cache import cache
 from django.contrib.auth.hashers import make_password
 from django.db import IntegrityError
+from django.conf import settings
 
 from drf_spectacular.utils import (extend_schema,OpenApiResponse,OpenApiExample)
 from drf_spectacular.types import OpenApiTypes
@@ -43,6 +46,48 @@ from .throttles import (
 )
 from rest_framework.throttling import (UserRateThrottle)
 from django.shortcuts import redirect
+
+REFRESH_COOKIE = "refresh_token"
+
+def set_refresh_cookie(response, refresh_token):
+    response.set_cookie(
+        key=REFRESH_COOKIE,
+        value=str(refresh_token),
+        max_age=int(settings.SIMPLE_JWT["REFRESH_TOKEN_LIFETIME"].total_seconds()),
+        httponly=True,               
+        secure=not settings.DEBUG,   
+        samesite="Lax",    
+        path="/accounts/",
+    )
+
+class CookieTokenRefreshView(APIView):
+    authentication_classes = []
+    permission_classes = []
+
+    def post(self, request):
+        raw_refresh = request.COOKIES.get(REFRESH_COOKIE)
+        if not raw_refresh:
+            return Response(
+                {"detail": "No refresh token."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        serializer = TokenRefreshSerializer(data={"refresh": raw_refresh})
+        try:
+            serializer.is_valid(raise_exception=True)
+        except (TokenError, InvalidToken):
+            response = Response(
+                {"detail": "Invalid or expired token."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+            response.delete_cookie(REFRESH_COOKIE, path="/accounts/")
+            return response
+
+        data = serializer.validated_data
+        response = Response({"access": data["access"]})
+        if "refresh" in data:
+            set_refresh_cookie(response, data["refresh"])
+        return response
 
 @extend_schema(
     summary="Register User",
@@ -455,15 +500,15 @@ class LoginApi(APIView):
       data=serializer.validated_data
       user= data["user"]
       has_business = Business.objects.filter(owner=user).exists()
-      return Response({
+      response=Response({
         "success": True,
         "message": "Login successful.",
-        "refresh": data["refresh"],
         "access": data["access"],
         "has_business": has_business,
         },status=status.HTTP_200_OK
       )
-
+      set_refresh_cookie(response, data["refresh"])
+      return response
     return Response({
       "success": False,
       "errors": serializer.errors
@@ -575,25 +620,19 @@ class LogoutApi(APIView):
   permission_classes = [IsAuthenticated]
   throttle_classes=[UserRateThrottle]
   def post(self, request):
-    refresh_token = request.data.get('refresh')
-    if not refresh_token:
-      return Response({
-        'error': 'Refresh token is required.'
-        },status=status.HTTP_400_BAD_REQUEST
-      )
-    try:
-      token = RefreshToken(refresh_token)
-      token.blacklist()
-      return Response({
-        'message': 'Logout successful.'
-        },status=status.HTTP_200_OK
-        )
+    refresh_token = request.COOKIES.get(REFRESH_COOKIE)
+    if refresh_token:
+      try:
+        RefreshToken(refresh_token).blacklist()
+      except TokenError:
+        pass
 
-    except Exception:
-      return Response({
-        'error': 'Invalid refresh token.'
-        },status=status.HTTP_400_BAD_REQUEST
-      )
+    response = Response({
+      'message': 'Logout successful.'
+      }, status=status.HTTP_200_OK
+    )
+    response.delete_cookie(REFRESH_COOKIE, path="/accounts/")
+    return response
 
 
 @extend_schema(
@@ -1196,15 +1235,16 @@ class GoogleJWTApi(APIView):
       )
 
     refresh = RefreshToken.for_user(user)
-    has_business = Business.objects.filter(owner=request.user).exists()
     refresh["token_version"] = user.profile.token_version
+    has_business = Business.objects.filter(owner=request.user).exists()
 
-    return Response({
-      "refresh": str(refresh),
+    response = Response({
       "access": str(refresh.access_token),
       "has_business": has_business,
-      },status=status.HTTP_200_OK
+      }, status=status.HTTP_200_OK
     )
+    set_refresh_cookie(response, refresh)
+    return response
 
 
 def google_login_cancelled(request):
