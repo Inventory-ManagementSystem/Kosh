@@ -9,7 +9,8 @@ class RegisterRateThrottle(AnonRateThrottle):
     scope = "register"
     rate = "3/min"
 
-class OTPRateThrottle(AnonRateThrottle): 
+class OTPRateThrottle(AnonRateThrottle):
+    scope="otp_send"
     rate = "10/hour"
 
 class ForgotPasswordRateThrottle(AnonRateThrottle):
