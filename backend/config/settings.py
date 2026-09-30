@@ -62,6 +62,7 @@ INSTALLED_APPS = [
     'allauth.account',
     'allauth.socialaccount',
     'allauth.socialaccount.providers.google',
+    'allauth.socialaccount.providers.github',
     'storages',
     'corsheaders',
 ]
@@ -212,12 +213,22 @@ SOCIALACCOUNT_PROVIDERS={
             'access_type': 'online',
             "prompt": "select_account",
         }
+    },
+    'github': {
+        'SCOPE': [
+            'user',
+            'repo',
+            'email',
+            'read:org',
+        ],
     }
 }
 SOCIALACCOUNT_LOGIN_ON_GET = True
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 
+GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID")
+GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET")
 AUTHENTICATION_BACKENDS ={
     'django.contrib.auth.backends.ModelBackend',
     'allauth.account.auth_backends.AuthenticationBackend',
