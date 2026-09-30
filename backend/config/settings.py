@@ -208,9 +208,13 @@ SOCIALACCOUNT_PROVIDERS={
             'profile',
             'email'
         ],
-        'AUTH_PARAMS':{'access_type': 'online'}
+        'AUTH_PARAMS':{
+            'access_type': 'online',
+            "prompt": "select_account",
+        }
     }
 }
+SOCIALACCOUNT_LOGIN_ON_GET = True
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 
