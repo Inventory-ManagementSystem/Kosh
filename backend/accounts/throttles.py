@@ -2,25 +2,32 @@ from rest_framework.throttling import AnonRateThrottle, UserRateThrottle
 
 
 class LoginRateThrottle(AnonRateThrottle):
-  rate = "5/min"
+    scope = "login"
+    rate = "5/min"
 
 class RegisterRateThrottle(AnonRateThrottle):
-  rate = "3/min"
+    scope = "register"
+    rate = "3/min"
 
-class OTPRateThrottle(AnonRateThrottle):
-  rate = "2/5min"
+class OTPRateThrottle(AnonRateThrottle): 
+    rate = "10/hour"
 
 class ForgotPasswordRateThrottle(AnonRateThrottle):
-  rate = "5/10min"
+    scope = "forgot_password"
+    rate = "10/hour"
 
 class VerifyOTPThrottle(AnonRateThrottle):
-  rate = "5/5min"
+    scope = "otp_verify"
+    rate = "5/min"
 
 class OAuthRateThrottle(AnonRateThrottle):
-  rate = "10/min"
+    scope = "oauth"
+    rate = "10/min"
 
 class BusinessRegistrationThrottle(UserRateThrottle):
-  rate = "5/hour"
+    scope = "business_register"
+    rate = "5/hour"
 
 class TokenRefreshRateThrottle(UserRateThrottle):
-  rate = "10/min"
+    scope = "token_refresh"
+    rate = "10/min"
