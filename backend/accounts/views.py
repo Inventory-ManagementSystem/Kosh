@@ -57,19 +57,19 @@ from rest_framework.throttling import (UserRateThrottle)
             summary="Request registration OTP",
             description="Use this data to request an email verification OTP.",
             value={
-                "username": "john_doe",
+                "name": "John Doe",
                 "email": "john@example.com",
                 "password": "John@1234"
             },
             request_only=True,
         ),
         OpenApiExample(
-            "Duplicate Username",
-            summary="Username already exists",
-            description="Use this data when john_doe is already registered.",
+            "Duplicate Email",
+            summary="Email already exists",
+            description="Use an email address that is already registered.",
             value={
-                "username": "john_doe",
-                "email": "newuser@example.com",
+                "name": "John Doe",
+                "email": "john@example.com",
                 "password": "NewUser@1234"
             },
             request_only=True,
@@ -94,10 +94,10 @@ from rest_framework.throttling import (UserRateThrottle)
             description="Validation error.",
             examples=[
                 OpenApiExample(
-                    "Duplicate Username",
+                    "Duplicate Email",
                     value={
-                        "username": [
-                            "Username already exists."
+                        "email": [
+                            "Email already exists"
                         ]
                     },
                     response_only=True,
@@ -132,7 +132,7 @@ class RegisterApi(APIView):
             )
 
         email = serializer.validated_data["email"]
-        username = serializer.validated_data["username"]
+        name = serializer.validated_data["name"]
         password = serializer.validated_data["password"]
 
         cooldown_key = f"registration_resend:{email}"
@@ -161,7 +161,7 @@ class RegisterApi(APIView):
         cache.set(
             data_key,
             {
-                "username": username,
+                "name": name,
                 "email": email,
                 "password": make_password(password),
             },
@@ -260,7 +260,7 @@ class RegisterApi(APIView):
                 OpenApiExample(
                     "Registration Conflict",
                     value={
-                        "error": "Username or email already exists."
+                        "error": "Email already exists."
                     },
                     response_only=True,
                 ),
@@ -350,15 +350,17 @@ class VerifyRegistrationOTPApi(APIView):
 
         try:
             user = User.objects.create(
-                username=registration_data["username"],
+                username=registration_data["email"],
                 email=registration_data["email"],
                 password=registration_data["password"],
             )
+            user.profile.name = registration_data["name"]
+            user.profile.save(update_fields=["name"])
 
         except IntegrityError:
             return Response(
                 {
-                    "error": "Username or email already exists."
+                    "error": "Email already exists."
                 },
                 status=status.HTTP_400_BAD_REQUEST
             )
@@ -384,16 +386,7 @@ class VerifyRegistrationOTPApi(APIView):
             "Login with Email",
             summary="Successful login using email",
             value={
-                "identifier": "john@example.com",
-                "password": "John@1234"
-            },
-            request_only=True,
-        ),
-        OpenApiExample(
-            "Login with Username",
-            summary="Successful login using username",
-            value={
-                "identifier": "john_doe",
+                "email": "john@example.com",
                 "password": "John@1234"
             },
             request_only=True,
@@ -402,7 +395,7 @@ class VerifyRegistrationOTPApi(APIView):
             "Invalid Credentials",
             summary="Failed login",
             value={
-                "identifier": "john@example.com",
+                "email": "john@example.com",
                 "password": "WrongPassword@123"
             },
             request_only=True,
@@ -436,7 +429,7 @@ class VerifyRegistrationOTPApi(APIView):
                         "success": False,
                         "errors": {
                             "non_field_errors": [
-                                "Invalid Username Or Password."
+                                "Invalid email or password."
                             ]
                         }
                     },
@@ -483,7 +476,7 @@ class LoginApi(APIView):
                     value={
                         "id": 1,
                         "email": "john@example.com",
-                        "username": "john_doe"
+                        "name": "John Doe"
                     },
                     response_only=True,
                 ),
@@ -511,8 +504,8 @@ class ProfileApi(APIView):
     user =request.user
     return Response({
       "id":user.id,
+      "name":user.profile.name,
       "email":user.email,
-      "username":user.username,
     }, status=status.HTTP_200_OK)
 
 
@@ -1057,7 +1050,7 @@ class ResetPasswordApi(APIView):
                 OpenApiExample(
                     "Password Change Success",
                     value={
-                        "message": "Password changed successfuly."
+                        "message": "Password changed successfully."
                     },
                     response_only=True,
                 ),
