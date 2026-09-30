@@ -219,7 +219,7 @@ AUTHENTICATION_BACKENDS ={
     'allauth.account.auth_backends.AuthenticationBackend',
 }
 
-LOGIN_REDIRECT_URL='/'
+LOGIN_REDIRECT_URL = "https://koshh.me/oauth/callback"
 LOGOUT_REDIRECT_URL='/'
 
 CORS_ALLOWED_ORIGINS=[

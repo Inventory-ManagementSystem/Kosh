@@ -1187,7 +1187,7 @@ class ChangePasswordApi(APIView):
 )
 class GoogleJWTApi(APIView):
   throttle_classes=[OAuthRateThrottle]
-  def get(self, request):
+  def post(self, request):
     user = request.user
     if not user.is_authenticated:
       return Response({"error": "Google authentication failed."
