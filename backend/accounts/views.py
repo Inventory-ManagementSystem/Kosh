@@ -42,6 +42,7 @@ from .throttles import (
     BusinessRegistrationThrottle,
 )
 from rest_framework.throttling import (UserRateThrottle)
+from django.shortcuts import redirect
 
 @extend_schema(
     summary="Register User",
@@ -1205,6 +1206,11 @@ class GoogleJWTApi(APIView):
       },status=status.HTTP_200_OK
     )
 
+
+def google_login_cancelled(request):
+    return redirect(
+        "https://koshh.me/oauth/callback?error=google_login_cancelled"
+    )
 
 
 @extend_schema(
