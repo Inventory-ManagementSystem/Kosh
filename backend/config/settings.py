@@ -196,7 +196,10 @@ REST_FRAMEWORK = {
         "anon": "20/min",
         "user": "100/min",
     },
+
+    "EXCEPTION_HANDLER": "accounts.exception_handler.custom_exception_handler",
 }
+
 SPECTACULAR_SETTINGS = {
     "TITLE": "Kosh API",
     "DESCRIPTION": "API documentation for Kosh backend",
@@ -260,8 +263,13 @@ CORS_ALLOWED_ORIGINS=[
 
 CSRF_TRUSTED_ORIGINS = [
     "https://kosh.dev-sushant.me",
+    "https://koshh.me",
 ]
 
 CORS_ALLOW_CREDENTIALS=True
 
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+
+REFRESH_COOKIE_SAMESITE = "Lax" if DEBUG else "None"
+SESSION_COOKIE_SAMESITE = "Lax" if DEBUG else "None"
+SESSION_COOKIE_SECURE = not DEBUG
