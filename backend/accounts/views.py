@@ -887,69 +887,45 @@ class GoogleJWTApi(APIView):
         "authenticated through GitHub OAuth."
     ),
     responses={
-        200: OpenApiResponse(
-            response=OpenApiTypes.OBJECT,
-            description="JWT tokens generated successfully.",
-            examples=[
-                OpenApiExample(
-                    "GitHub Login Without Business",
-                    value={
-                        "access": "eyJhbGciOiJIUzI1NiIs...",
-                        "has_business": False
-                    },
-                    response_only=True,
-                ),
-                OpenApiExample(
-                    "GitHub Login With Business",
-                    value={
-                        "access": "eyJhbGciOiJIUzI1NiIs...",
-                        "has_business": True
-                    },
-                    response_only=True,
-                ),
-            ],
-        ),
-        401: OpenApiResponse(
-            response=OpenApiTypes.OBJECT,
-            description="GitHub authentication failed.",
-            examples=[
-                OpenApiExample(
-                    "GitHub Authentication Failed",
-                    value={
-                        "error": "GitHub authentication failed."
-                    },
-                    response_only=True,
-                ),
-            ],
-        ),
+        200: resp("Login successful. The refresh token is set as an HttpOnly cookie.",
+                ok_example("Github Login Without Business", "Login successful.",
+                            data={"access": "eyJhbGciOiJIUzI1NiIs...", "has_business": False}),
+                ok_example("Github Login With Business", "Login successful.",
+                            data={"access": "eyJhbGciOiJIUzI1NiIs...", "has_business": True})),
+        401: resp("Github authentication failed.",
+                err_example("Github Authentication Failed", "Github authentication failed.",
+                            "GITHUB_AUTH_FAILED")),
+        429: resp("Too many requests.", THROTTLED_EXAMPLE),
     },
     tags=["Authentication"],
 )
 class GitHubJWTApi(APIView):
+    authentication_classes = [SessionAuthNoCSRF]
     throttle_classes = [OAuthRateThrottle]
 
     def post(self, request):
         user = request.user
         if not user.is_authenticated:
-            return Response(
-                {"error": "GitHub authentication failed."},
-                status=status.HTTP_401_UNAUTHORIZED,
-            )
+            return error_response(
+                        "Github authentication failed.", "GITHUB_AUTH_FAILED",
+                        status=status.HTTP_401_UNAUTHORIZED,
+                    )
         refresh = RefreshToken.for_user(user)
         refresh["token_version"] = user.profile.token_version
         has_business = Business.objects.filter(
             owner=request.user
         ).exists()
 
-        response = Response(
-            {
+        response = success_response(
+            "Login successful.",
+            data={
                 "access": str(refresh.access_token),
                 "has_business": has_business,
             },
-            status=status.HTTP_200_OK,
         )
         set_refresh_cookie(response, refresh)
         return response
+
 def google_login_cancelled(request):
     return redirect(
         "https://koshh.me/oauth/callback?error=google_login_cancelled"
