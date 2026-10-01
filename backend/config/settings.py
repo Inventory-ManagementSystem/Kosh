@@ -47,6 +47,7 @@ DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL")
 # Application definition
 SITE_ID=1
 INSTALLED_APPS = [
+    'jazzmin',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -66,6 +67,11 @@ INSTALLED_APPS = [
     'storages',
     'corsheaders',
 ]
+
+JAZZMIN_SETTINGS = {
+    "site_title": "Kosh Admin",
+    "site_header": "Kosh",
+}
 
 STORAGES = {
     "default": {
