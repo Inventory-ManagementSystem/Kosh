@@ -12,7 +12,7 @@ from .serializers import (
   ChangePasswordSerializer,
   BusinessRegistrationSerializer,
   VerifyRegistrationOTPSerializer,
-  LogoutSerializer,
+
 )
 from rest_framework.permissions import IsAuthenticated
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -28,7 +28,7 @@ from django.contrib.auth.models import User
 from django.core.mail import send_mail
 from django.core.cache import cache
 from django.contrib.auth.hashers import make_password
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 from django.conf import settings
 
 from drf_spectacular.utils import (extend_schema,OpenApiResponse,OpenApiExample)
@@ -43,9 +43,11 @@ from .throttles import (
     VerifyOTPThrottle,
     OAuthRateThrottle,
     BusinessRegistrationThrottle,
+    TokenRefreshRateThrottle,
 )
 from rest_framework.throttling import (UserRateThrottle)
 from django.shortcuts import redirect
+from .responses import success_response, error_response
 
 REFRESH_COOKIE = "refresh_token"
 
@@ -63,12 +65,13 @@ def set_refresh_cookie(response, refresh_token):
 class CookieTokenRefreshView(APIView):
     authentication_classes = []
     permission_classes = []
+    throttle_classes = [TokenRefreshRateThrottle]
 
     def post(self, request):
         raw_refresh = request.COOKIES.get(REFRESH_COOKIE)
         if not raw_refresh:
-            return Response(
-                {"detail": "No refresh token."},
+             return error_response(
+                "No refresh token.", "REFRESH_TOKEN_MISSING",
                 status=status.HTTP_401_UNAUTHORIZED,
             )
 
@@ -76,15 +79,17 @@ class CookieTokenRefreshView(APIView):
         try:
             serializer.is_valid(raise_exception=True)
         except (TokenError, InvalidToken):
-            response = Response(
-                {"detail": "Invalid or expired token."},
+            response = error_response(
+                "Invalid or expired token.", "REFRESH_TOKEN_INVALID",
                 status=status.HTTP_401_UNAUTHORIZED,
             )
             response.delete_cookie(REFRESH_COOKIE, path="/accounts/")
             return response
 
         data = serializer.validated_data
-        response = Response({"access": data["access"]})
+        response = success_response(
+            "Token refreshed.", data={"access": data["access"]}
+        )
         if "refresh" in data:
             set_refresh_cookie(response, data["refresh"])
         return response
@@ -172,10 +177,8 @@ class RegisterApi(APIView):
         serializer = RegisterSerializer(data=request.data)
 
         if not serializer.is_valid():
-            return Response(
-                serializer.errors,
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            return error_response("Validation failed.", "VALIDATION_ERROR",
+                                   errors=serializer.errors)
 
         email = serializer.validated_data["email"]
         name = serializer.validated_data["name"]
@@ -188,13 +191,9 @@ class RegisterApi(APIView):
         if cache.get(cooldown_key):
             ttl = cache.ttl(cooldown_key)
 
-            return Response(
-                {
-                    "error": "Please wait before requesting another OTP.",
-                    "cooldown_remaining": max(ttl, 0)
-                },
-                status=status.HTTP_429_TOO_MANY_REQUESTS
-            )
+            return error_response("Please wait before requesting another OTP.", "OTP_COOLDOWN", 
+                                  details={"retry_after": max(ttl, 0)}, 
+                                  status=status.HTTP_429_TOO_MANY_REQUESTS)
 
         otp = str(secrets.randbelow(900000) + 100000)
 
@@ -232,12 +231,7 @@ class RegisterApi(APIView):
             [email],
         )
 
-        return Response(
-            {
-                "message": "OTP has been sent to your email."
-            },
-            status=status.HTTP_200_OK
-        )
+        return success_response("OTP has been sent to your email.")
 
 @extend_schema(
     summary="Verify Registration OTP",
@@ -339,10 +333,8 @@ class VerifyRegistrationOTPApi(APIView):
         serializer = VerifyRegistrationOTPSerializer(data=request.data)
 
         if not serializer.is_valid():
-            return Response(
-                serializer.errors,
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            return error_response("Validation failed.", "VALIDATION_ERROR",
+                                    errors=serializer.errors)
 
         email = serializer.validated_data["email"]
         submitted_otp = serializer.validated_data["otp"]
@@ -355,12 +347,7 @@ class VerifyRegistrationOTPApi(APIView):
         registration_data = cache.get(data_key)
 
         if not stored_otp or not registration_data:
-            return Response(
-                {
-                    "error": "OTP has expired. Please register again."
-                },
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            return error_response("OTP has expired. Please register again.", "OTP_EXPIRED")
 
         attempts = cache.get(attempts_key, 0)
 
@@ -369,15 +356,8 @@ class VerifyRegistrationOTPApi(APIView):
             cache.delete(data_key)
             cache.delete(attempts_key)
 
-            return Response(
-                {
-                    "error": (
-                        "Too many incorrect OTP attempts. "
-                        "Please register again."
-                    )
-                },
-                status=status.HTTP_429_TOO_MANY_REQUESTS
-            )
+            return error_response("Too many incorrect OTP attempts. Please register again.", "OTP_ATTEMPTS_EXCEEDED", 
+                                  status=status.HTTP_429_TOO_MANY_REQUESTS)
 
         if submitted_otp != stored_otp:
             attempts += 1
@@ -388,42 +368,30 @@ class VerifyRegistrationOTPApi(APIView):
                 timeout=300
             )
 
-            return Response(
-                {
-                    "error": "Invalid OTP.",
-                    "remaining_attempts": 5 - attempts
-                },
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            return error_response("Invalid OTP.", "INVALID_OTP", 
+                                  details={"remaining_attempts": 5 - attempts})
 
         try:
-            user = User.objects.create(
-                username=registration_data["email"],
-                email=registration_data["email"],
-                password=registration_data["password"],
-            )
-            user.profile.name = registration_data["name"]
-            user.profile.save(update_fields=["name"])
+            with transaction.atomic():
+                user = User.objects.create(
+                    username=registration_data["email"],
+                    email=registration_data["email"],
+                    password=registration_data["password"],
+                )
+                user.profile.name = registration_data["name"]
+                user.profile.save(update_fields=["name"])
 
         except IntegrityError:
-            return Response(
-                {
-                    "error": "Email already exists."
-                },
-                status=status.HTTP_400_BAD_REQUEST
-            )
+           return error_response("Email already exists.", "EMAIL_EXISTS", 
+                                 status=status.HTTP_409_CONFLICT)
 
         cache.delete(otp_key)
         cache.delete(data_key)
         cache.delete(attempts_key)
         cache.delete(f"registration_resend:{email}")
 
-        return Response(
-            {
-                "message": "Email verified and registration successful."
-            },
-            status=status.HTTP_201_CREATED
-        )
+        return success_response("Email verified and registration successful.", 
+                                status=status.HTTP_201_CREATED)
 
 
 @extend_schema(
@@ -495,19 +463,22 @@ class LoginApi(APIView):
       data=serializer.validated_data
       user= data["user"]
       has_business = Business.objects.filter(owner=user).exists()
-      response=Response({
-        "success": True,
-        "message": "Login successful.",
-        "access": data["access"],
-        "has_business": has_business,
-        },status=status.HTTP_200_OK
-      )
+      response = success_response(
+                    "Login successful.",
+                    data={"access": data["access"], 
+                        "has_business": has_business},
+                )
       set_refresh_cookie(response, data["refresh"])
       return response
-    return Response({
-      "success": False,
-      "errors": serializer.errors
-      },status=status.HTTP_400_BAD_REQUEST
+
+    if "non_field_errors" in serializer.errors:
+        return error_response(
+            "Invalid email or password.", "INVALID_CREDENTIALS",
+            errors=serializer.errors,
+        )
+    return error_response(
+        "Validation failed.", "VALIDATION_ERROR",
+        errors=serializer.errors,
     )
 
 
@@ -550,18 +521,18 @@ class ProfileApi(APIView):
   throttle_classes=[UserRateThrottle]
   def get(self,request):
     user =request.user
-    return Response({
-      "id":user.id,
-      "name":user.profile.name,
-      "email":user.email,
-    }, status=status.HTTP_200_OK)
+    return success_response("Profile retrieved.", data={
+        "id": user.id,
+        "name": user.profile.name,
+        "email": user.email,
+    })
 
 
 
 @extend_schema(
     summary="Logout User",
     description="Logs out the currently authenticated user using the refresh token.",
-    request=LogoutSerializer,
+    request=None,
     responses={
         200: OpenApiResponse(
             response=OpenApiTypes.OBJECT,
@@ -622,10 +593,7 @@ class LogoutApi(APIView):
       except TokenError:
         pass
 
-    response = Response({
-      'message': 'Logout successful.'
-      }, status=status.HTTP_200_OK
-    )
+    response = success_response("Logout successful.")
     response.delete_cookie(REFRESH_COOKIE, path="/accounts/")
     return response
 
@@ -705,9 +673,9 @@ class ForgotPasswordApi(APIView):
         serializer = ForgotPasswordSerializer(data=request.data)
 
         if not serializer.is_valid():
-            return Response(
-                serializer.errors,
-                status=status.HTTP_400_BAD_REQUEST
+            return error_response(
+                "Validation failed.", "VALIDATION_ERROR",
+                errors=serializer.errors,
             )
 
         email = serializer.validated_data["email"].lower()
@@ -717,19 +685,21 @@ class ForgotPasswordApi(APIView):
         retry_after = cache.ttl(cooldown_key)
 
         if retry_after > 0:
-            return Response(
-                {
-                    "message": "Please wait before requesting another OTP.",
-                    "retry_after": retry_after
-                },
-                status=status.HTTP_429_TOO_MANY_REQUESTS
+            return error_response(
+                "Please wait before requesting another OTP.", "OTP_COOLDOWN",
+                details={"retry_after": retry_after},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
             )
 
         user = User.objects.filter(email__iexact=email).first()
 
+        cache.set(cooldown_key, True, timeout=60)
+
         if user:
 
             otp = str(secrets.randbelow(900000) + 100000)
+
+            cache.delete(f"password_reset_attempts:{email}")
 
             otp_key = f"password_reset_otp:{email}"
 
@@ -739,11 +709,7 @@ class ForgotPasswordApi(APIView):
                 timeout=300
             )
 
-            cache.set(
-                cooldown_key,
-                True,
-                timeout=60
-            )
+
 
             send_mail(
                 "Kosh Password Reset OTP",
@@ -753,12 +719,9 @@ class ForgotPasswordApi(APIView):
                 [email],
             )
 
-        return Response(
-            {
-                "message": "If an account exists with this email, "
-                           "a password reset OTP has been sent."
-            },
-            status=status.HTTP_200_OK
+        return success_response(
+            "If an account exists with this email, "
+            "a password reset OTP has been sent."
         )
 
 
@@ -845,9 +808,9 @@ class VerifyResetOTPApi(APIView):
         serializer = VerifyResetOTPSerializer(data=request.data)
 
         if not serializer.is_valid():
-            return Response(
-                serializer.errors,
-                status=status.HTTP_400_BAD_REQUEST
+            return error_response(
+                "Validation failed.", "VALIDATION_ERROR",
+                errors=serializer.errors,
             )
 
         email = serializer.validated_data["email"].lower()
@@ -859,12 +822,9 @@ class VerifyResetOTPApi(APIView):
         stored_otp = cache.get(otp_key)
 
         if stored_otp is None:
-            return Response(
-                {
-                    "error": "OTP has expired or is invalid."
-                },
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            return error_response(
+            "OTP has expired. Please request a new one.", "OTP_EXPIRED",
+        )
 
         attempts = cache.get(attempts_key, 0)
 
@@ -872,12 +832,10 @@ class VerifyResetOTPApi(APIView):
             cache.delete(otp_key)
             cache.delete(attempts_key)
 
-            return Response(
-                {
-                    "error": "Too many incorrect attempts. "
-                             "Please request a new OTP."
-                },
-                status=status.HTTP_429_TOO_MANY_REQUESTS
+            return error_response(
+                "Too many incorrect attempts. Please request a new OTP.",
+                "OTP_ATTEMPTS_EXCEEDED",
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
             )
 
         if not secrets.compare_digest(str(stored_otp), otp):
@@ -888,12 +846,10 @@ class VerifyResetOTPApi(APIView):
                 cache.delete(otp_key)
                 cache.delete(attempts_key)
 
-                return Response(
-                    {
-                        "error": "Too many incorrect attempts. "
-                                "Please request a new OTP."
-                    },
-                    status=status.HTTP_429_TOO_MANY_REQUESTS
+                return error_response(
+                    "Too many incorrect attempts. Please request a new OTP.",
+                    "OTP_ATTEMPTS_EXCEEDED",
+                    status=status.HTTP_429_TOO_MANY_REQUESTS,
                 )
 
             cache.set(
@@ -902,23 +858,15 @@ class VerifyResetOTPApi(APIView):
                 timeout=300
             )
 
-            return Response(
-                {
-                    "error": "Invalid OTP.",
-                    "attempts_remaining": 5 - attempts
-                },
-                status=status.HTTP_400_BAD_REQUEST
+            return error_response(
+                "Invalid OTP.", "INVALID_OTP",
+                details={"remaining_attempts": 5 - attempts},
             )
 
         user = User.objects.filter(email__iexact=email).first()
 
         if user is None:
-            return Response(
-                {
-                    "error": "Invalid OTP."
-                },
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            return error_response("Invalid OTP.", "INVALID_OTP")
 
         reset_token = secrets.token_urlsafe(32)
 
@@ -933,12 +881,9 @@ class VerifyResetOTPApi(APIView):
         cache.delete(otp_key)
         cache.delete(attempts_key)
 
-        return Response(
-            {
-                "message": "OTP verified successfully.",
-                "reset_token": reset_token
-            },
-            status=status.HTTP_200_OK
+        return success_response(
+            "OTP verified successfully.",
+            data={"reset_token": reset_token},
         )
 
 
@@ -1013,9 +958,9 @@ class ResetPasswordApi(APIView):
         serializer = ResetPasswordSerializer(data=request.data)
 
         if not serializer.is_valid():
-            return Response(
-                serializer.errors,
-                status=status.HTTP_400_BAD_REQUEST
+            return error_response(
+                "Validation failed.", "VALIDATION_ERROR",
+                errors=serializer.errors,
             )
 
         reset_token = serializer.validated_data["reset_token"]
@@ -1026,11 +971,8 @@ class ResetPasswordApi(APIView):
         user_id = cache.get(reset_token_key)
 
         if user_id is None:
-            return Response(
-                {
-                    "error": "Invalid or expired reset token."
-                },
-                status=status.HTTP_400_BAD_REQUEST
+            return error_response(
+                "Invalid or expired reset token.", "INVALID_RESET_TOKEN",
             )
 
         user = User.objects.filter(id=user_id).first()
@@ -1038,24 +980,22 @@ class ResetPasswordApi(APIView):
         if user is None:
             cache.delete(reset_token_key)
 
-            return Response(
-                {
-                    "error": "Invalid or expired reset token."
-                },
-                status=status.HTTP_400_BAD_REQUEST
+            return error_response(
+                "Invalid or expired reset token.", "INVALID_RESET_TOKEN",
             )
 
         user.set_password(new_password)
         user.save()
 
+        user.profile.token_version += 1
+        user.profile.save(update_fields=["token_version"])
+
+        for outstanding_token in OutstandingToken.objects.filter(user=user):
+            BlacklistedToken.objects.get_or_create(token=outstanding_token)
+
         cache.delete(reset_token_key)
 
-        return Response(
-            {
-                "message": "Password reset successfully."
-            },
-            status=status.HTTP_200_OK
-        )
+        return success_response("Password reset successfully.")
 
 
 @extend_schema(
@@ -1143,9 +1083,9 @@ class ChangePasswordApi(APIView):
         serializer=ChangePasswordSerializer(data=request.data)
 
         if not serializer.is_valid():
-            return Response(
-                serializer.errors,
-                status=status.HTTP_400_BAD_REQUEST
+            return error_response(
+                "Validation failed.", "VALIDATION_ERROR",
+                errors=serializer.errors,
             )
         user=request.user
 
@@ -1153,10 +1093,10 @@ class ChangePasswordApi(APIView):
         new_password=serializer.validated_data["new_password"]
 
         if not user.check_password(current_password):
-            return Response({
-               "error": "Current Password is incorrect."
-            },
-            status=status.HTTP_400_BAD_REQUEST)
+            return error_response(
+                "Current password is incorrect.", "INVALID_CURRENT_PASSWORD",
+            )
+        
         user.set_password(new_password)
         user.save()
 
@@ -1168,9 +1108,9 @@ class ChangePasswordApi(APIView):
                 token=outstanding_token
             )
 
-        return Response({
-           "message": "Password changed successfuly."
-        }, status=status.HTTP_200_OK)
+        response = success_response("Password changed successfully.")
+        response.delete_cookie(REFRESH_COOKIE, path="/accounts/")
+        return response
 
 
 @extend_schema(
@@ -1225,18 +1165,21 @@ class GoogleJWTApi(APIView):
   def post(self, request):
     user = request.user
     if not user.is_authenticated:
-      return Response({"error": "Google authentication failed."
-        },status=status.HTTP_401_UNAUTHORIZED
-      )
+      return error_response(
+            "Google authentication failed.", "GOOGLE_AUTH_FAILED",
+            status=status.HTTP_401_UNAUTHORIZED,
+        )
 
     refresh = RefreshToken.for_user(user)
     refresh["token_version"] = user.profile.token_version
     has_business = Business.objects.filter(owner=request.user).exists()
 
-    response = Response({
-      "access": str(refresh.access_token),
-      "has_business": has_business,
-      }, status=status.HTTP_200_OK
+    response = success_response(
+        "Login successful.",
+        data={
+            "access": str(refresh.access_token),
+            "has_business": has_business,
+        },
     )
     set_refresh_cookie(response, refresh)
     return response
@@ -1341,28 +1284,32 @@ class BusinessRegistration(APIView):
   throttle_classes=[BusinessRegistrationThrottle]
   def post(self, request):
     if Business.objects.filter(owner=request.user).exists():
-      return Response({
-        "success": False,
-        "message": "Business is already registered."
-        },status=status.HTTP_400_BAD_REQUEST
-      )
+      return error_response(
+            "Business is already registered.", "BUSINESS_EXISTS",
+            status=status.HTTP_409_CONFLICT,
+        )
     serializer = BusinessRegistrationSerializer(data=request.data)
-    if serializer.is_valid():
-      business = serializer.save(owner=request.user)
-      return Response({
-        "success": True,
-        "message": "Business registered successfully.",
-        "data": {
-          "id": business.id,
-          "business_name": business.business_name,
-          "business_type": business.business_type,
-          "city": business.city
-          }
-        },status=status.HTTP_201_CREATED
-      )
+    if not serializer.is_valid():
+        return error_response(
+            "Validation failed.", "VALIDATION_ERROR",
+            errors=serializer.errors,
+        )
 
-    return Response({
-      "success": False,
-      "errors": serializer.errors
-      },status=status.HTTP_400_BAD_REQUEST
+    try:
+        business = serializer.save(owner=request.user)
+    except IntegrityError:
+        return error_response(
+            "Business is already registered.", "BUSINESS_EXISTS",
+            status=status.HTTP_409_CONFLICT,
+        )
+
+    return success_response(
+        "Business registered successfully.",
+        data={
+            "id": business.id,
+            "business_name": business.business_name,
+            "business_type": business.business_type,
+            "city": business.city,
+        },
+        status=status.HTTP_201_CREATED,
     )

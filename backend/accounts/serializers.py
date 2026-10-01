@@ -42,12 +42,15 @@ class RegisterSerializer(serializers.ModelSerializer):
     return " ".join(value.split())
 
   def validate_email(self,value):
-    if User.objects.filter(email=value).exists():
+    value=value.lower()
+    if User.objects.filter(email__iexact=value).exists():
       raise serializers.ValidationError("Email already exists")
     return value
 
 class VerifyRegistrationOTPSerializer(serializers.Serializer):
   email = serializers.EmailField(required=True)
+  def validate_email(self, value):
+     return value.lower()
 
   otp = serializers.CharField(
       required=True,
@@ -159,10 +162,7 @@ class ChangePasswordSerializer(serializers.Serializer):
    def validate(self, data):
       if data["new_password"]!=data["confirm_password"]:
          raise serializers.ValidationError({
-            "confirm password": "passwords do not match."
+            "confirm_password": "Passwords do not match."
          })
 
       return data
-
-class LogoutSerializer(serializers.Serializer):
-    refresh = serializers.CharField(required=True)
