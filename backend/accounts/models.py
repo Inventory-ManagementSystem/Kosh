@@ -25,6 +25,7 @@ class Profile(models.Model):
         on_delete=models.CASCADE,
         related_name="profile"
     )
+    name = models.CharField(max_length=50,null=True,blank=True)
     token_version=models.PositiveIntegerField(default=1)
 
     def __str__(self):
