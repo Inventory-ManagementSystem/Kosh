@@ -1241,7 +1241,76 @@ class GoogleJWTApi(APIView):
     set_refresh_cookie(response, refresh)
     return response
 
+@extend_schema(
+    summary="Generate JWT for GitHub User",
+    description=(
+        "Generates access and refresh JWT tokens for a user "
+        "authenticated through GitHub OAuth."
+    ),
+    responses={
+        200: OpenApiResponse(
+            response=OpenApiTypes.OBJECT,
+            description="JWT tokens generated successfully.",
+            examples=[
+                OpenApiExample(
+                    "GitHub Login Without Business",
+                    value={
+                        "access": "eyJhbGciOiJIUzI1NiIs...",
+                        "has_business": False
+                    },
+                    response_only=True,
+                ),
+                OpenApiExample(
+                    "GitHub Login With Business",
+                    value={
+                        "access": "eyJhbGciOiJIUzI1NiIs...",
+                        "has_business": True
+                    },
+                    response_only=True,
+                ),
+            ],
+        ),
+        401: OpenApiResponse(
+            response=OpenApiTypes.OBJECT,
+            description="GitHub authentication failed.",
+            examples=[
+                OpenApiExample(
+                    "GitHub Authentication Failed",
+                    value={
+                        "error": "GitHub authentication failed."
+                    },
+                    response_only=True,
+                ),
+            ],
+        ),
+    },
+    tags=["Authentication"],
+)
+class GitHubJWTApi(APIView):
+    throttle_classes = [OAuthRateThrottle]
 
+    def post(self, request):
+        user = request.user
+        if not user.is_authenticated:
+            return Response(
+                {"error": "GitHub authentication failed."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+        refresh = RefreshToken.for_user(user)
+        refresh["token_version"] = user.profile.token_version
+        has_business = Business.objects.filter(
+            owner=request.user
+        ).exists()
+
+        response = Response(
+            {
+                "access": str(refresh.access_token),
+                "has_business": has_business,
+            },
+            status=status.HTTP_200_OK,
+        )
+        set_refresh_cookie(response, refresh)
+        return response
 def google_login_cancelled(request):
     return redirect(
         "https://koshh.me/oauth/callback?error=google_login_cancelled"

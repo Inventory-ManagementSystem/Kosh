@@ -217,24 +217,28 @@ SOCIALACCOUNT_PROVIDERS={
         }
     },
     'github': {
-        'SCOPE': [
-            'user',
-            'repo',
-            'email',
-            'read:org',
-        ],
-    }
+        'SCOPE': ['user:email'],
+    },
 }
 SOCIALACCOUNT_LOGIN_ON_GET = True
+ACCOUNT_SIGNUP_FIELDS = ["email*"]        
+ACCOUNT_EMAIL_VERIFICATION = "none"       
+
+SOCIALACCOUNT_AUTO_SIGNUP = True            
+SOCIALACCOUNT_EMAIL_AUTHENTICATION = True
+SOCIALACCOUNT_EMAIL_AUTHENTICATION_AUTO_CONNECT = True
+
+SESSION_COOKIE_SAMESITE = "None"          
+SESSION_COOKIE_SECURE = True
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 
 GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID")
 GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET")
-AUTHENTICATION_BACKENDS ={
+AUTHENTICATION_BACKENDS =[
     'django.contrib.auth.backends.ModelBackend',
     'allauth.account.auth_backends.AuthenticationBackend',
-}
+]
 
 LOGIN_REDIRECT_URL = "https://koshh.me/oauth/callback"
 LOGOUT_REDIRECT_URL='/'

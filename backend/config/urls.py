@@ -21,10 +21,16 @@ from drf_spectacular.views import (
     SpectacularAPIView,
     SpectacularSwaggerView,
 )
+from django.views.generic import RedirectView
 
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('accounts/',include("accounts.urls")),
+    path('accounts/3rdparty/login/cancelled/',RedirectView.as_view(url="https://koshh.me/oauth/callback?error=cancelled")),
+    path('accounts/3rdparty/signup/',RedirectView.as_view(url="https://koshh.me/oauth/callback?error=signup_failed")),
+    path('accounts/login/',RedirectView.as_view(url="https://koshh.me/login")),
+    path('accounts/signup/',RedirectView.as_view(url="https://koshh.me/signup")),
+    path('accounts/3rdparty/login/error/', RedirectView.as_view(url="https://koshh.me/oauth/callback?error=login_failed")),
     path('accounts/',include('allauth.urls')),
     path('', HealthAPIView.as_view(), name='health'),
     path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
