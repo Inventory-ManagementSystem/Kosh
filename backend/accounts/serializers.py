@@ -6,7 +6,7 @@ from .models import Business
 import re
 
 
-USERNAME_REGEX = r'^[a-zA-Z0-9_]{3,50}$'
+NAME_REGEX = r'^[A-Za-z ]+$'
 
 PASSWORD_REGEX = (
     r'^(?=.*[a-z])'
@@ -17,9 +17,16 @@ PASSWORD_REGEX = (
 )
 
 class RegisterSerializer(serializers.ModelSerializer):
-  username = serializers.RegexField(
-      regex=USERNAME_REGEX,
-      required=True
+  name = serializers.RegexField(
+    regex=NAME_REGEX,
+    min_length=2,
+    max_length=50,
+    required=True,
+    error_messages={
+      "invalid": "Name can contain only letters and single spaces.",
+      "min_length": "Name must be at least 2 characters long.",
+      "max_length": "Name cannot exceed 50 characters."
+    }
   )
   email = serializers.EmailField(required=True)
   password = serializers.RegexField(
@@ -29,12 +36,10 @@ class RegisterSerializer(serializers.ModelSerializer):
   )
   class Meta:
     model = User
-    fields = ('username','email','password')
+    fields = ('name','email','password')
 
-  def validate_username(self, value):
-    if User.objects.filter(username=value).exists():
-      raise serializers.ValidationError("Username already exists.")
-    return value
+  def validate_name(self, value):
+    return " ".join(value.split())
 
   def validate_email(self,value):
     if User.objects.filter(email=value).exists():
@@ -55,35 +60,40 @@ class VerifyRegistrationOTPSerializer(serializers.Serializer):
 
 
 class LoginSerializer(serializers.Serializer):
-  identifier = serializers.CharField(required=True)
+  email = serializers.EmailField(required=True)
   password = serializers.CharField(required=True,write_only=True)
 
-  def validate(self,data):
-    identifier = data.get('identifier')
-    password = data.get('password')
-    if '@' in identifier:
-      user = User.objects.filter(email=identifier).first()
-      if user is None:
-        raise serializers.ValidationError("Invalid username/email or password.")
-      username = user.username
-    else:
-      username = identifier
+  def validate(self, data):
+    email = data.get("email")
+    password = data.get("password")
 
+    user = User.objects.filter(email__iexact=email).first()
 
-    user = authenticate(username=username,password=password)
     if user is None:
-      raise serializers.ValidationError('Invalid Username Or Password.')
+      raise serializers.ValidationError("Invalid email or password.")
+
+    user = authenticate(
+      username=user.username,
+      password=password
+    )
+
+    if user is None:
+      raise serializers.ValidationError(
+        "Invalid email or password."
+      )
 
     if not user.is_active:
-      raise serializers.ValidationError('User account is disabled.')
+      raise serializers.ValidationError(
+        "User account is disabled."
+      )
 
     refresh = RefreshToken.for_user(user)
     refresh["token_version"] = user.profile.token_version
 
-    return{
-      'refresh': str(refresh),
-      'access': str(refresh.access_token),
-      'user':user,
+    return {
+      "refresh": str(refresh),
+      "access": str(refresh.access_token),
+      "user": user,
     }
 
 
