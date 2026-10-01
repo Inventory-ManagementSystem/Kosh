@@ -48,6 +48,7 @@ from .throttles import (
 from rest_framework.throttling import (UserRateThrottle)
 from django.shortcuts import redirect
 from .responses import success_response, error_response
+from .swagger import ok_example, err_example, resp, THROTTLED_EXAMPLE, UNAUTHORIZED_RESPONSE
 
 REFRESH_COOKIE = "refresh_token"
 
@@ -61,6 +62,20 @@ def set_refresh_cookie(response, refresh_token):
         samesite="Lax",    
         path="/accounts/",
     )
+
+@extend_schema(
+    summary="Refresh Access Token",
+    description="Reads the refresh token from the HttpOnly cookie. No request body.",
+    request=None,
+    responses={
+        200: resp("New access token issued.",
+                  ok_example("Token Refreshed", "Token refreshed.",
+                             data={"access": "eyJhbGciOiJIUzI1NiIs..."})),
+        401: resp("Cookie missing, or token invalid or blacklisted.",
+                  err_example("Missing", "No refresh token.", "REFRESH_TOKEN_MISSING"),
+                  err_example("Invalid", "Invalid or expired token.", "REFRESH_TOKEN_INVALID")),
+    },
+)
 
 class CookieTokenRefreshView(APIView):
     authentication_classes = []
@@ -127,48 +142,15 @@ class CookieTokenRefreshView(APIView):
         ),
     ],
     responses={
-        200: OpenApiResponse(
-            response=OpenApiTypes.OBJECT,
-            description="Registration OTP sent successfully.",
-            examples=[
-                OpenApiExample(
-                    "OTP Sent",
-                    value={
-                        "message": "OTP has been sent to your email."
-                    },
-                    response_only=True,
-                ),
-            ],
-        ),
-        400: OpenApiResponse(
-            response=OpenApiTypes.OBJECT,
-            description="Validation error.",
-            examples=[
-                OpenApiExample(
-                    "Duplicate Email",
-                    value={
-                        "email": [
-                            "Email already exists"
-                        ]
-                    },
-                    response_only=True,
-                ),
-            ],
-        ),
-        429: OpenApiResponse(
-            response=OpenApiTypes.OBJECT,
-            description="OTP resend cooldown is active.",
-            examples=[
-                OpenApiExample(
-                    "Cooldown Active",
-                    value={
-                        "error": "Please wait before requesting another OTP.",
-                        "cooldown_remaining": 43
-                    },
-                    response_only=True,
-                ),
-            ],
-        ),
+        200: resp("Registration OTP sent.",
+                ok_example("OTP Sent", "OTP has been sent to your email.")),
+        400: resp("Validation error.",
+                err_example("Duplicate Email", "Validation failed.", "VALIDATION_ERROR",
+                            errors={"email": ["Email already exists"]})),
+        429: resp("Resend cooldown active, or too many requests.",
+                err_example("Cooldown Active", "Please wait before requesting another OTP.",
+                            "OTP_COOLDOWN", details={"retry_after": 43}),
+                THROTTLED_EXAMPLE),
     },
 )
 class RegisterApi(APIView):
@@ -265,65 +247,21 @@ class RegisterApi(APIView):
         ),
     ],
     responses={
-        201: OpenApiResponse(
-            response=OpenApiTypes.OBJECT,
-            description="Email verified and user registered successfully.",
-            examples=[
-                OpenApiExample(
-                    "Registration Success",
-                    value={
-                        "message": (
-                            "Email verified and registration successful."
-                        )
-                    },
-                    response_only=True,
-                ),
-            ],
-        ),
-        400: OpenApiResponse(
-            response=OpenApiTypes.OBJECT,
-            description="Invalid or expired OTP, or registration conflict.",
-            examples=[
-                OpenApiExample(
-                    "Invalid OTP",
-                    value={
-                        "error": "Invalid OTP.",
-                        "remaining_attempts": 4
-                    },
-                    response_only=True,
-                ),
-                OpenApiExample(
-                    "Expired OTP",
-                    value={
-                        "error": "OTP has expired. Please register again."
-                    },
-                    response_only=True,
-                ),
-                OpenApiExample(
-                    "Registration Conflict",
-                    value={
-                        "error": "Email already exists."
-                    },
-                    response_only=True,
-                ),
-            ],
-        ),
-        429: OpenApiResponse(
-            response=OpenApiTypes.OBJECT,
-            description="Maximum OTP verification attempts exceeded.",
-            examples=[
-                OpenApiExample(
-                    "Too Many Attempts",
-                    value={
-                        "error": (
-                            "Too many incorrect OTP attempts. "
-                            "Please register again."
-                        )
-                    },
-                    response_only=True,
-                ),
-            ],
-        ),
+        201: resp("Email verified and user registered.",
+                ok_example("Registration Success", "Email verified and registration successful.")),
+        400: resp("Validation error, wrong OTP or expired OTP.",
+                err_example("Invalid OTP", "Invalid OTP.", "INVALID_OTP",
+                            details={"remaining_attempts": 4}),
+                err_example("Expired OTP", "OTP has expired. Please register again.", "OTP_EXPIRED"),
+                err_example("Validation Error", "Validation failed.", "VALIDATION_ERROR",
+                            errors={"otp": ["Ensure this field has at least 6 characters."]})),
+        409: resp("Email already registered.",
+                err_example("Email Exists", "Email already exists.", "EMAIL_EXISTS")),
+        429: resp("Too many incorrect attempts, or throttled.",
+                err_example("Too Many Attempts",
+                            "Too many incorrect OTP attempts. Please register again.",
+                            "OTP_ATTEMPTS_EXCEEDED"),
+                THROTTLED_EXAMPLE),
     },
 )
 
@@ -418,41 +356,15 @@ class VerifyRegistrationOTPApi(APIView):
         ),
     ],
     responses={
-        200: OpenApiResponse(
-            response=OpenApiTypes.OBJECT,
-            description="Login successful.",
-            examples=[
-                OpenApiExample(
-                    "Login Success",
-                    value={
-                        "success": True,
-                        "message": "Login successful.",
-                        "refresh": "eyJhbGciOiJIUzI1NiIs...",
-                        "access": "eyJhbGciOiJIUzI1NiIs...",
-                        "has_business": False
-                    },
-                    response_only=True,
-                ),
-            ],
-        ),
-        400: OpenApiResponse(
-            response=OpenApiTypes.OBJECT,
-            description="Invalid credentials.",
-            examples=[
-                OpenApiExample(
-                    "Invalid Credentials",
-                    value={
-                        "success": False,
-                        "errors": {
-                            "non_field_errors": [
-                                "Invalid email or password."
-                            ]
-                        }
-                    },
-                    response_only=True,
-                ),
-            ],
-        ),
+        200: resp("Login successful. The refresh token is set as an HttpOnly cookie.",
+                ok_example("Login Success", "Login successful.",
+                            data={"access": "eyJhbGciOiJIUzI1NiIs...", "has_business": False})),
+        400: resp("Invalid credentials or validation error.",
+                err_example("Invalid Credentials", "Invalid email or password.", "INVALID_CREDENTIALS",
+                            errors={"non_field_errors": ["Invalid email or password."]}),
+                err_example("Validation Error", "Validation failed.", "VALIDATION_ERROR",
+                            errors={"email": ["This field is required."]})),
+        429: resp("Too many login attempts.", THROTTLED_EXAMPLE),
     },
 )
 class LoginApi(APIView):
@@ -486,34 +398,10 @@ class LoginApi(APIView):
     summary="Get User Profile",
     description="Retrieve the profile information of the currently authenticated user.",
     responses={
-        200: OpenApiResponse(
-            response=OpenApiTypes.OBJECT,
-            description="Profile retrieved successfully.",
-            examples=[
-                OpenApiExample(
-                    "Profile Success",
-                    value={
-                        "id": 1,
-                        "email": "john@example.com",
-                        "name": "John Doe"
-                    },
-                    response_only=True,
-                ),
-            ],
-        ),
-        401: OpenApiResponse(
-            response=OpenApiTypes.OBJECT,
-            description="Authentication credentials were not provided or are invalid.",
-            examples=[
-                OpenApiExample(
-                    "Unauthorized",
-                    value={
-                        "detail": "Authentication credentials were not provided."
-                    },
-                    response_only=True,
-                ),
-            ],
-        ),
+        200: resp("Profile retrieved.",
+                ok_example("Profile Success", "Profile retrieved.",
+                            data={"id": 1, "name": "John Doe", "email": "john@example.com"})),
+        401: UNAUTHORIZED_RESPONSE,
     },
 )
 class ProfileApi(APIView):
@@ -534,54 +422,12 @@ class ProfileApi(APIView):
     description="Logs out the currently authenticated user using the refresh token.",
     request=None,
     responses={
-        200: OpenApiResponse(
-            response=OpenApiTypes.OBJECT,
-            description="Logout successful.",
-            examples=[
-                OpenApiExample(
-                    "Logout Success",
-                    value={
-                        "message": "Logout successful."
-                    },
-                    response_only=True,
-                ),
-            ],
-        ),
-        400: OpenApiResponse(
-            response=OpenApiTypes.OBJECT,
-            description="Invalid or missing refresh token.",
-            examples=[
-                OpenApiExample(
-                    "Missing Refresh Token",
-                    value={
-                        "error": "Refresh token is required."
-                    },
-                    response_only=True,
-                ),
-                OpenApiExample(
-                    "Invalid Refresh Token",
-                    value={
-                        "error": "Invalid refresh token."
-                    },
-                    response_only=True,
-                ),
-            ],
-        ),
-        401: OpenApiResponse(
-            response=OpenApiTypes.OBJECT,
-            description="Authentication credentials were not provided or are invalid.",
-            examples=[
-                OpenApiExample(
-                    "Unauthorized",
-                    value={
-                        "detail": "Authentication credentials were not provided."
-                    },
-                    response_only=True,
-                ),
-            ],
-        ),
+        200: resp("Logout successful. The refresh cookie is cleared.",
+                ok_example("Logout Success", "Logout successful.")),
+        401: UNAUTHORIZED_RESPONSE,
     },
 )
+
 class LogoutApi(APIView):
   permission_classes = [IsAuthenticated]
   throttle_classes=[UserRateThrottle]
@@ -621,49 +467,16 @@ class LogoutApi(APIView):
         ),
     ],
     responses={
-        200: OpenApiResponse(
-            response=OpenApiTypes.OBJECT,
-            description="Password reset OTP sent successfully.",
-            examples=[
-                OpenApiExample(
-                    "OTP Sent",
-                    value={
-                        "message": "If an account exists with this email, "
-                                   "a password reset OTP has been sent."
-                    },
-                    response_only=True,
-                ),
-            ],
-        ),
-        400: OpenApiResponse(
-            response=OpenApiTypes.OBJECT,
-            description="Invalid request or email address.",
-            examples=[
-                OpenApiExample(
-                    "Invalid Email",
-                    value={
-                        "email": [
-                            "User with this email does not exist."
-                        ]
-                    },
-                    response_only=True,
-                ),
-            ],
-        ),
-        429: OpenApiResponse(
-            response=OpenApiTypes.OBJECT,
-            description="Too many OTP requests.",
-            examples=[
-                OpenApiExample(
-                    "OTP Cooldown",
-                    value={
-                        "message": "Please wait before requesting another OTP.",
-                        "retry_after": 45
-                    },
-                    response_only=True,
-                ),
-            ],
-        ),
+        200: resp("Generic response, whether or not the email exists.",
+                ok_example("OTP Sent",
+                            "If an account exists with this email, a password reset OTP has been sent.")),
+        400: resp("Validation error.",
+                err_example("Invalid Email", "Validation failed.", "VALIDATION_ERROR",
+                            errors={"email": ["Enter a valid email address."]})),
+        429: resp("Resend cooldown active, or throttled.",
+                err_example("OTP Cooldown", "Please wait before requesting another OTP.",
+                            "OTP_COOLDOWN", details={"retry_after": 45}),
+                THROTTLED_EXAMPLE),
     },
 )
 class ForgotPasswordApi(APIView):
@@ -750,55 +563,21 @@ class ForgotPasswordApi(APIView):
         ),
     ],
     responses={
-        200: OpenApiResponse(
-            response=OpenApiTypes.OBJECT,
-            description="OTP verified successfully.",
-            examples=[
-                OpenApiExample(
-                    "OTP Verified",
-                    value={
-                        "message": "OTP verified successfully.",
-                        "reset_token": "example-reset-token"
-                    },
-                    response_only=True,
-                ),
-            ],
-        ),
-        400: OpenApiResponse(
-            response=OpenApiTypes.OBJECT,
-            description="Invalid or expired OTP.",
-            examples=[
-                OpenApiExample(
-                    "Invalid OTP",
-                    value={
-                        "error": "Invalid OTP.",
-                        "attempts_remaining": 4
-                    },
-                    response_only=True,
-                ),
-                OpenApiExample(
-                    "Expired OTP",
-                    value={
-                        "error": "OTP has expired or is invalid."
-                    },
-                    response_only=True,
-                ),
-            ],
-        ),
-        429: OpenApiResponse(
-            response=OpenApiTypes.OBJECT,
-            description="Too many incorrect OTP attempts.",
-            examples=[
-                OpenApiExample(
-                    "Too Many Attempts",
-                    value={
-                        "error": "Too many incorrect attempts. "
-                                 "Please request a new OTP."
-                    },
-                    response_only=True,
-                ),
-            ],
-        ),
+        200: resp("OTP verified. Use the reset token in the next call.",
+                ok_example("OTP Verified", "OTP verified successfully.",
+                            data={"reset_token": "example-reset-token"})),
+        400: resp("Validation error, wrong OTP or expired OTP.",
+                err_example("Invalid OTP", "Invalid OTP.", "INVALID_OTP",
+                            details={"remaining_attempts": 4}),
+                err_example("Expired OTP", "OTP has expired. Please request a new one.",
+                            "OTP_EXPIRED"),
+                err_example("Validation Error", "Validation failed.", "VALIDATION_ERROR",
+                            errors={"otp": ["Ensure this field has at least 6 characters."]})),
+        429: resp("Too many incorrect attempts, or throttled.",
+                err_example("Too Many Attempts",
+                            "Too many incorrect attempts. Please request a new OTP.",
+                            "OTP_ATTEMPTS_EXCEEDED"),
+                THROTTLED_EXAMPLE),
     },
 )
 class VerifyResetOTPApi(APIView):
@@ -914,41 +693,13 @@ class VerifyResetOTPApi(APIView):
         ),
     ],
     responses={
-        200: OpenApiResponse(
-            response=OpenApiTypes.OBJECT,
-            description="Password reset successfully.",
-            examples=[
-                OpenApiExample(
-                    "Password Reset Success",
-                    value={
-                        "message": "Password reset successfully."
-                    },
-                    response_only=True,
-                ),
-            ],
-        ),
-        400: OpenApiResponse(
-            response=OpenApiTypes.OBJECT,
-            description="Invalid reset token or passwords do not match.",
-            examples=[
-                OpenApiExample(
-                    "Invalid Reset Token",
-                    value={
-                        "error": "Invalid or expired reset token."
-                    },
-                    response_only=True,
-                ),
-                OpenApiExample(
-                    "Password Validation Error",
-                    value={
-                        "new_password": [
-                            "Passwords do not match."
-                        ]
-                    },
-                    response_only=True,
-                ),
-            ],
-        ),
+        200: resp("Password reset. All existing sessions are invalidated.",
+                ok_example("Password Reset Success", "Password reset successfully.")),
+        400: resp("Invalid reset token or validation error.",
+                err_example("Invalid Reset Token", "Invalid or expired reset token.",
+                            "INVALID_RESET_TOKEN"),
+                err_example("Password Validation Error", "Validation failed.", "VALIDATION_ERROR",
+                            errors={"confirm_password": ["Passwords do not match."]})),
     },
 )
 class ResetPasswordApi(APIView):
@@ -1025,54 +776,14 @@ class ResetPasswordApi(APIView):
         ),
     ],
     responses={
-        200: OpenApiResponse(
-            response=OpenApiTypes.OBJECT,
-            description="Password changed successfully.",
-            examples=[
-                OpenApiExample(
-                    "Password Change Success",
-                    value={
-                        "message": "Password changed successfully."
-                    },
-                    response_only=True,
-                ),
-            ],
-        ),
-        400: OpenApiResponse(
-            response=OpenApiTypes.OBJECT,
-            description="Invalid current password or passwords do not match.",
-            examples=[
-                OpenApiExample(
-                    "Incorrect Current Password",
-                    value={
-                        "error": "Current Password is incorrect."
-                    },
-                    response_only=True,
-                ),
-                OpenApiExample(
-                    "Password Validation Error",
-                    value={
-                        "new_password": [
-                            "Passwords do not match."
-                        ]
-                    },
-                    response_only=True,
-                ),
-            ],
-        ),
-        401: OpenApiResponse(
-            response=OpenApiTypes.OBJECT,
-            description="Authentication credentials were not provided or are invalid.",
-            examples=[
-                OpenApiExample(
-                    "Unauthorized",
-                    value={
-                        "detail": "Authentication credentials were not provided."
-                    },
-                    response_only=True,
-                ),
-            ],
-        ),
+        200: resp("Password changed. The refresh cookie is cleared, so the user must log in again.",
+                ok_example("Password Change Success", "Password changed successfully.")),
+        400: resp("Wrong current password or validation error.",
+                err_example("Incorrect Current Password", "Current password is incorrect.",
+                            "INVALID_CURRENT_PASSWORD"),
+                err_example("Password Validation Error", "Validation failed.", "VALIDATION_ERROR",
+                            errors={"confirm_password": ["Passwords do not match."]})),
+        401: UNAUTHORIZED_RESPONSE,
     },
 )
 class ChangePasswordApi(APIView):
@@ -1120,43 +831,15 @@ class ChangePasswordApi(APIView):
         "authenticated through Google OAuth."
     ),
     responses={
-        200: OpenApiResponse(
-            response=OpenApiTypes.OBJECT,
-            description="JWT tokens generated successfully.",
-            examples=[
-                OpenApiExample(
-                    "Google Login Without Business",
-                    value={
-                        "refresh": "eyJhbGciOiJIUzI1NiIs...",
-                        "access": "eyJhbGciOiJIUzI1NiIs...",
-                        "has_business": False
-                    },
-                    response_only=True,
-                ),
-                OpenApiExample(
-                    "Google Login With Business",
-                    value={
-                        "refresh": "eyJhbGciOiJIUzI1NiIs...",
-                        "access": "eyJhbGciOiJIUzI1NiIs...",
-                        "has_business": True
-                    },
-                    response_only=True,
-                ),
-            ],
-        ),
-        401: OpenApiResponse(
-            response=OpenApiTypes.OBJECT,
-            description="Google authentication failed.",
-            examples=[
-                OpenApiExample(
-                    "Google Authentication Failed",
-                    value={
-                        "error": "Google authentication failed."
-                    },
-                    response_only=True,
-                ),
-            ],
-        ),
+        200: resp("Login successful. The refresh token is set as an HttpOnly cookie.",
+                ok_example("Google Login Without Business", "Login successful.",
+                            data={"access": "eyJhbGciOiJIUzI1NiIs...", "has_business": False}),
+                ok_example("Google Login With Business", "Login successful.",
+                            data={"access": "eyJhbGciOiJIUzI1NiIs...", "has_business": True})),
+        401: resp("Google authentication failed.",
+                err_example("Google Authentication Failed", "Google authentication failed.",
+                            "GOOGLE_AUTH_FAILED")),
+        429: resp("Too many requests.", THROTTLED_EXAMPLE),
     },
     tags=["Authentication"],
 )
@@ -1218,65 +901,17 @@ def google_login_cancelled(request):
         ),
     ],
     responses={
-        201: OpenApiResponse(
-            response=OpenApiTypes.OBJECT,
-            description="Business registered successfully.",
-            examples=[
-                OpenApiExample(
-                    "Business Registration Success",
-                    value={
-                        "success": True,
-                        "message": "Business registered successfully.",
-                        "data": {
-                            "id": 1,
-                            "business_name": "Kosh Technologies",
-                            "business_type": "Retail",
-                            "city": "Ghaziabad"
-                        }
-                    },
-                    response_only=True,
-                ),
-            ],
-        ),
-        400: OpenApiResponse(
-            response=OpenApiTypes.OBJECT,
-            description="Invalid business details or business already registered.",
-            examples=[
-                OpenApiExample(
-                    "Business Already Registered",
-                    value={
-                        "success": False,
-                        "message": "Business is already registered."
-                    },
-                    response_only=True,
-                ),
-                OpenApiExample(
-                    "Invalid Business Details",
-                    value={
-                        "success": False,
-                        "errors": {
-                            "business_name": [
-                                "This field may not be blank."
-                            ]
-                        }
-                    },
-                    response_only=True,
-                ),
-            ],
-        ),
-        401: OpenApiResponse(
-            response=OpenApiTypes.OBJECT,
-            description="Authentication credentials were not provided or are invalid.",
-            examples=[
-                OpenApiExample(
-                    "Unauthorized",
-                    value={
-                        "detail": "Authentication credentials were not provided."
-                    },
-                    response_only=True,
-                ),
-            ],
-        ),
+        201: resp("Business registered.",
+                ok_example("Business Registration Success", "Business registered successfully.",
+                            data={"id": 1, "business_name": "Kosh Technologies",
+                                "business_type": "Retail", "city": "Ghaziabad"})),
+        400: resp("Validation error.",
+                err_example("Invalid Business Details", "Validation failed.", "VALIDATION_ERROR",
+                            errors={"business_name": ["This field may not be blank."]})),
+        401: UNAUTHORIZED_RESPONSE,
+        409: resp("Business already registered for this user.",
+                err_example("Business Already Registered", "Business is already registered.",
+                            "BUSINESS_EXISTS")),
     },
 )
 class BusinessRegistration(APIView):
