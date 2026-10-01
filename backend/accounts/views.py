@@ -49,6 +49,11 @@ from rest_framework.throttling import (UserRateThrottle)
 from django.shortcuts import redirect
 from .responses import success_response, error_response
 from .swagger import ok_example, err_example, resp, THROTTLED_EXAMPLE, UNAUTHORIZED_RESPONSE
+from rest_framework.authentication import SessionAuthentication
+
+class SessionAuthNoCSRF(SessionAuthentication):
+    def enforce_csrf(self, request):
+        return
 
 REFRESH_COOKIE = "refresh_token"
 
@@ -57,10 +62,17 @@ def set_refresh_cookie(response, refresh_token):
         key=REFRESH_COOKIE,
         value=str(refresh_token),
         max_age=int(settings.SIMPLE_JWT["REFRESH_TOKEN_LIFETIME"].total_seconds()),
-        httponly=True,               
-        secure=not settings.DEBUG,   
-        samesite="Lax",    
+        httponly=True,
+        secure=not settings.DEBUG,
+        samesite=settings.REFRESH_COOKIE_SAMESITE,
         path="/accounts/",
+    )
+
+def delete_refresh_cookie(response):
+    response.delete_cookie(
+        REFRESH_COOKIE,
+        path="/accounts/",
+        samesite=settings.REFRESH_COOKIE_SAMESITE,
     )
 
 @extend_schema(
@@ -98,7 +110,7 @@ class CookieTokenRefreshView(APIView):
                 "Invalid or expired token.", "REFRESH_TOKEN_INVALID",
                 status=status.HTTP_401_UNAUTHORIZED,
             )
-            response.delete_cookie(REFRESH_COOKIE, path="/accounts/")
+            delete_refresh_cookie(response)
             return response
 
         data = serializer.validated_data
@@ -440,7 +452,7 @@ class LogoutApi(APIView):
         pass
 
     response = success_response("Logout successful.")
-    response.delete_cookie(REFRESH_COOKIE, path="/accounts/")
+    delete_refresh_cookie(response)
     return response
 
 
@@ -820,7 +832,7 @@ class ChangePasswordApi(APIView):
             )
 
         response = success_response("Password changed successfully.")
-        response.delete_cookie(REFRESH_COOKIE, path="/accounts/")
+        delete_refresh_cookie(response)
         return response
 
 
@@ -844,6 +856,7 @@ class ChangePasswordApi(APIView):
     tags=["Authentication"],
 )
 class GoogleJWTApi(APIView):
+  authentication_classes = [SessionAuthNoCSRF]
   throttle_classes=[OAuthRateThrottle]
   def post(self, request):
     user = request.user
