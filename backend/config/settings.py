@@ -201,6 +201,8 @@ SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(minutes=10),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=1),
     'AUTH_HEADER_TYPES': ('Bearer',),
+    'ROTATE_REFRESH_TOKENS': True,
+    'BLACKLIST_AFTER_ROTATION': True,
 }
 
 SOCIALACCOUNT_PROVIDERS={
@@ -249,5 +251,7 @@ CORS_ALLOWED_ORIGINS=[
 CSRF_TRUSTED_ORIGINS = [
     "https://kosh.dev-sushant.me",
 ]
+
+CORS_ALLOW_CREDENTIALS=True
 
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
