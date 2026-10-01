@@ -153,6 +153,8 @@ class RegisterApi(APIView):
 
         otp = str(secrets.randbelow(900000) + 100000)
 
+        cache.delete(f"registration_attempts:{email}")
+
         cache.set(
             otp_key,
             otp,
