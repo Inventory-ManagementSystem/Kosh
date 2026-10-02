@@ -18,4 +18,5 @@ urlpatterns = [
   path("github/jwt/", views.GitHubJWTApi.as_view(), name="github-jwt"),
   path("business/register/",views.BusinessRegistration.as_view(),name="business-register"),
   path("verify-registration-otp/",views.VerifyRegistrationOTPApi.as_view(), name="verify_registration_otp",),
+  path("resend-registration-otp/", views.ResendRegistrationOTPApi.as_view(), name="resend-registration-otp"),
 ]
