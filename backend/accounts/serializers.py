@@ -166,3 +166,9 @@ class ChangePasswordSerializer(serializers.Serializer):
          })
 
       return data
+
+class ResendRegistrationOTPSerializer(serializers.Serializer):
+  email = serializers.EmailField(required=True)
+
+  def validate_email(self, value):
+    return value.lower()

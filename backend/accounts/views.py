@@ -12,6 +12,7 @@ from .serializers import (
   ChangePasswordSerializer,
   BusinessRegistrationSerializer,
   VerifyRegistrationOTPSerializer,
+  ResendRegistrationOTPSerializer,
 
 )
 from rest_framework.permissions import IsAuthenticated
@@ -1006,3 +1007,83 @@ class BusinessRegistration(APIView):
         },
         status=status.HTTP_201_CREATED,
     )
+
+@extend_schema(
+    summary="Resend Registration OTP",
+    description=(
+        "Sends a new OTP for a pending registration. Only the email is "
+        "needed, because the registration data is already held server-side."
+    ),
+    request=ResendRegistrationOTPSerializer,
+    examples=[
+        OpenApiExample(
+            "Resend OTP",
+            summary="Resend the registration OTP",
+            value={"email": "john@example.com"},
+            request_only=True,
+        ),
+    ],
+    responses={
+        200: resp("OTP resent.",
+                  ok_example("OTP Resent", "OTP has been resent to your email.")),
+        400: resp("Validation error, or the pending registration expired.",
+                  err_example("Registration Expired",
+                              "Registration session expired. Please register again.",
+                              "REGISTRATION_EXPIRED"),
+                  err_example("Validation Error", "Validation failed.",
+                              "VALIDATION_ERROR",
+                              errors={"email": ["Enter a valid email address."]})),
+        429: resp("Cooldown active, or throttled.",
+                  err_example("OTP Cooldown",
+                              "Please wait before requesting another OTP.",
+                              "OTP_COOLDOWN", details={"retry_after": 45}),
+                  THROTTLED_EXAMPLE),
+    },
+)
+class ResendRegistrationOTPApi(APIView):
+    throttle_classes = [OTPRateThrottle]
+
+    def post(self, request):
+        serializer = ResendRegistrationOTPSerializer(data=request.data)
+        if not serializer.is_valid():
+            return error_response(
+                "Validation failed.", "VALIDATION_ERROR",
+                errors=serializer.errors,
+            )
+
+        email = serializer.validated_data["email"]
+
+        cooldown_key = f"registration_resend:{email}"
+        otp_key = f"registration_otp:{email}"
+        data_key = f"registration_data:{email}"
+
+        registration_data = cache.get(data_key)
+        if not registration_data:
+            return error_response(
+                "Registration session expired. Please register again.",
+                "REGISTRATION_EXPIRED",
+            )
+
+        if cache.get(cooldown_key):
+            return error_response(
+                "Please wait before requesting another OTP.", "OTP_COOLDOWN",
+                details={"retry_after": max(cache.ttl(cooldown_key), 0)},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+
+        otp = str(secrets.randbelow(900000) + 100000)
+
+        cache.delete(f"registration_attempts:{email}")
+        cache.set(otp_key, otp, timeout=300)
+        cache.set(data_key, registration_data, timeout=300)  # keep the session alive
+        cache.set(cooldown_key, True, timeout=60)
+
+        send_mail(
+            "Kosh Email Verification OTP",
+            f"Your Kosh email verification OTP is {otp}. "
+            "This OTP is valid for 5 minutes.",
+            None,
+            [email],
+        )
+
+        return success_response("OTP has been resent to your email.")
