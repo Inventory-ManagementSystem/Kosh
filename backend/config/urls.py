@@ -15,7 +15,7 @@ Including another URLconf
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
 from django.contrib import admin
-from django.urls import path, include
+from django.urls import path, re_path, include
 from .views import HealthAPIView
 from drf_spectacular.views import (
     SpectacularAPIView,
@@ -31,6 +31,8 @@ urlpatterns = [
     path('accounts/login/',RedirectView.as_view(url="https://koshh.me/login")),
     path('accounts/signup/',RedirectView.as_view(url="https://koshh.me/signup")),
     path('accounts/3rdparty/login/error/', RedirectView.as_view(url="https://koshh.me/oauth/callback?error=login_failed")),
+    re_path(r'^accounts/(password|email|confirm-email|reauthenticate|inactive)/',
+        RedirectView.as_view(url="https://koshh.me/login")),
     path('accounts/',include('allauth.urls')),
     path('', HealthAPIView.as_view(), name='health'),
     path('api/schema/', SpectacularAPIView.as_view(), name='schema'),

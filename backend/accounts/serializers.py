@@ -52,14 +52,10 @@ class VerifyRegistrationOTPSerializer(serializers.Serializer):
   def validate_email(self, value):
      return value.lower()
 
-  otp = serializers.CharField(
-      required=True,
-      min_length=6,
-      max_length=6
-  )
-  
-  
-
+  otp = serializers.RegexField(
+    regex=r'^[0-9]{6}$',
+    error_messages={"invalid": "OTP must be exactly 6 digits."},
+)
 
 
 class LoginSerializer(serializers.Serializer):
@@ -108,16 +104,18 @@ class BusinessRegistrationSerializer(serializers.ModelSerializer):
     if not value.strip():
       raise serializers.ValidationError("Business name cannot be empty.")
     return value
+
+
 class ForgotPasswordSerializer(serializers.Serializer):
     email = serializers.EmailField()
 
 
 class VerifyResetOTPSerializer(serializers.Serializer):
     email = serializers.EmailField()
-    otp = serializers.CharField(
-        min_length=6,
-        max_length=6
-    )
+    otp = serializers.RegexField(
+    regex=r'^[0-9]{6}$',
+    error_messages={"invalid": "OTP must be exactly 6 digits."},
+)
 
 
 class ResetPasswordSerializer(serializers.Serializer):

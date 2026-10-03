@@ -198,6 +198,8 @@ REST_FRAMEWORK = {
     },
 
     "EXCEPTION_HANDLER": "accounts.exception_handler.custom_exception_handler",
+    "NUM_PROXIES": 1,
+    
 }
 
 SPECTACULAR_SETTINGS = {
