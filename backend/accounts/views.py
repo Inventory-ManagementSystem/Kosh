@@ -2,7 +2,7 @@ from django.shortcuts import render
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from .models import Business
+from .models import Business, Profile
 from .serializers import (
   RegisterSerializer,
   LoginSerializer,
@@ -26,6 +26,7 @@ from rest_framework_simplejwt.token_blacklist.models import (
 )
 
 from django.contrib.auth.models import User
+from django.contrib.auth import logout as django_logout
 from django.core.mail import send_mail
 from django.core.cache import cache
 from django.contrib.auth.hashers import make_password
@@ -45,6 +46,8 @@ from .throttles import (
     OAuthRateThrottle,
     BusinessRegistrationThrottle,
     TokenRefreshRateThrottle,
+    ChangePasswordThrottle,
+    ResetPasswordThrottle,
 )
 from rest_framework.throttling import (UserRateThrottle)
 from django.shortcuts import redirect
@@ -102,6 +105,19 @@ class CookieTokenRefreshView(APIView):
                 "No refresh token.", "REFRESH_TOKEN_MISSING",
                 status=status.HTTP_401_UNAUTHORIZED,
             )
+
+        try:
+            token = RefreshToken(raw_refresh)  # checks signature, expiry and blacklist
+            profile = Profile.objects.get(user_id=token["user_id"])
+            if token.get("token_version") != profile.token_version:
+                raise TokenError("Stale token")
+        except (TokenError, KeyError, Profile.DoesNotExist):
+            response = error_response(
+                "Invalid or expired token.", "REFRESH_TOKEN_INVALID",
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+            delete_refresh_cookie(response)
+            return response
 
         serializer = TokenRefreshSerializer(data={"refresh": raw_refresh})
         try:
@@ -167,6 +183,7 @@ class CookieTokenRefreshView(APIView):
     },
 )
 class RegisterApi(APIView):
+    authentication_classes = []
     throttle_classes=[RegisterRateThrottle]
     def post(self, request):
         serializer = RegisterSerializer(data=request.data)
@@ -183,50 +200,39 @@ class RegisterApi(APIView):
         otp_key = f"registration_otp:{email}"
         data_key = f"registration_data:{email}"
 
-        if cache.get(cooldown_key):
-            ttl = cache.ttl(cooldown_key)
-
-            return error_response("Please wait before requesting another OTP.", "OTP_COOLDOWN", 
-                                  details={"retry_after": max(ttl, 0)}, 
-                                  status=status.HTTP_429_TOO_MANY_REQUESTS)
+        if not cache.add(cooldown_key, True, timeout=60):
+            return error_response(
+                "Please wait before requesting another OTP.", "OTP_COOLDOWN",
+                details={"retry_after": max(cache.ttl(cooldown_key), 0)},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
 
         otp = str(secrets.randbelow(900000) + 100000)
 
+        try:
+            send_mail(
+                "Kosh Email Verification OTP",
+                f"Your Kosh email verification OTP is {otp}. "
+                "This OTP is valid for 5 minutes.",
+                None,
+                [email],
+            )
+        except Exception:
+            cache.delete(cooldown_key)
+            return error_response(
+                "Could not send the email. Please try again.", "EMAIL_SEND_FAILED",
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
         cache.delete(f"registration_attempts:{email}")
-
-        cache.set(
-            otp_key,
-            otp,
-            timeout=300
-        )
-
+        cache.set(otp_key, otp, timeout=300)
         cache.set(
             data_key,
-            {
-                "name": name,
-                "email": email,
-                "password": make_password(password),
-            },
-            timeout=300
+            {"name": name, "email": email, "password": make_password(password)},
+            timeout=300,
         )
 
-        cache.set(
-            cooldown_key,
-            True,
-            timeout=60
-        )
-
-        send_mail(
-            "Kosh Email Verification OTP",
-            (
-                f"Your Kosh email verification OTP is {otp}. "
-                "This OTP is valid for 5 minutes."
-            ),
-            None,
-            [email],
-        )
-
-        return success_response("OTP has been sent to your email.")
+        return success_response("OTP has been resent to your email.")
 
 @extend_schema(
     summary="Verify Registration OTP",
@@ -279,6 +285,7 @@ class RegisterApi(APIView):
 )
 
 class VerifyRegistrationOTPApi(APIView):
+    authentication_classes = []
     throttle_classes=[VerifyOTPThrottle]
     def post(self, request):
         serializer = VerifyRegistrationOTPSerializer(data=request.data)
@@ -381,6 +388,7 @@ class VerifyRegistrationOTPApi(APIView):
     },
 )
 class LoginApi(APIView):
+  authentication_classes = []
   throttle_classes=[LoginRateThrottle]
   def post(self,request):
     serializer = LoginSerializer(data=request.data)
@@ -432,17 +440,21 @@ class ProfileApi(APIView):
 
 @extend_schema(
     summary="Logout User",
-    description="Logs out the currently authenticated user using the refresh token.",
+    description=(
+        "Blacklists the refresh token from the HttpOnly cookie and clears the cookie. "
+        "No access token is needed, so logout still works after the access token has "
+        "expired. No request body. Returns 200 even if the cookie is missing or invalid."
+    ),
     request=None,
     responses={
         200: resp("Logout successful. The refresh cookie is cleared.",
                 ok_example("Logout Success", "Logout successful.")),
-        401: UNAUTHORIZED_RESPONSE,
+        429: resp("Too many requests.", THROTTLED_EXAMPLE),
     },
 )
 
 class LogoutApi(APIView):
-  permission_classes = [IsAuthenticated]
+  authentication_classes = []
   throttle_classes=[UserRateThrottle]
   def post(self, request):
     refresh_token = request.COOKIES.get(REFRESH_COOKIE)
@@ -493,6 +505,7 @@ class LogoutApi(APIView):
     },
 )
 class ForgotPasswordApi(APIView):
+    authentication_classes = []
     throttle_classes=[ForgotPasswordRateThrottle]
     def post(self, request):
 
@@ -594,6 +607,7 @@ class ForgotPasswordApi(APIView):
     },
 )
 class VerifyResetOTPApi(APIView):
+    authentication_classes = []
     throttle_classes=[VerifyOTPThrottle]
     def post(self, request):
 
@@ -713,9 +727,12 @@ class VerifyResetOTPApi(APIView):
                             "INVALID_RESET_TOKEN"),
                 err_example("Password Validation Error", "Validation failed.", "VALIDATION_ERROR",
                             errors={"confirm_password": ["Passwords do not match."]})),
+        429: resp("Too many requests.", THROTTLED_EXAMPLE),
     },
 )
 class ResetPasswordApi(APIView):
+    authentication_classes = []
+    throttle_classes=[ResetPasswordThrottle]
 
     def post(self, request):
 
@@ -748,14 +765,15 @@ class ResetPasswordApi(APIView):
                 "Invalid or expired reset token.", "INVALID_RESET_TOKEN",
             )
 
-        user.set_password(new_password)
-        user.save()
+        with transaction.atomic():
+            user.set_password(new_password)
+            user.save()
 
-        user.profile.token_version += 1
-        user.profile.save(update_fields=["token_version"])
+            user.profile.token_version += 1
+            user.profile.save(update_fields=["token_version"])
 
-        for outstanding_token in OutstandingToken.objects.filter(user=user):
-            BlacklistedToken.objects.get_or_create(token=outstanding_token)
+            for outstanding_token in OutstandingToken.objects.filter(user=user):
+                BlacklistedToken.objects.get_or_create(token=outstanding_token)
 
         cache.delete(reset_token_key)
 
@@ -797,11 +815,13 @@ class ResetPasswordApi(APIView):
                 err_example("Password Validation Error", "Validation failed.", "VALIDATION_ERROR",
                             errors={"confirm_password": ["Passwords do not match."]})),
         401: UNAUTHORIZED_RESPONSE,
+        429: resp("Too many requests.", THROTTLED_EXAMPLE),
     },
 )
 class ChangePasswordApi(APIView):
 
     permission_classes=[ IsAuthenticated]
+    throttle_classes=[ChangePasswordThrottle]
 
     def post(self, request):
         serializer=ChangePasswordSerializer(data=request.data)
@@ -821,16 +841,15 @@ class ChangePasswordApi(APIView):
                 "Current password is incorrect.", "INVALID_CURRENT_PASSWORD",
             )
         
-        user.set_password(new_password)
-        user.save()
+        with transaction.atomic():
+            user.set_password(new_password)
+            user.save()
 
-        user.profile.token_version += 1
-        user.profile.save(update_fields=["token_version"])
+            user.profile.token_version += 1
+            user.profile.save(update_fields=["token_version"])
 
-        for outstanding_token in OutstandingToken.objects.filter(user=user):
-            BlacklistedToken.objects.get_or_create(
-                token=outstanding_token
-            )
+            for outstanding_token in OutstandingToken.objects.filter(user=user):
+                BlacklistedToken.objects.get_or_create(token=outstanding_token)
 
         response = success_response("Password changed successfully.")
         delete_refresh_cookie(response)
@@ -879,6 +898,7 @@ class GoogleJWTApi(APIView):
         },
     )
     set_refresh_cookie(response, refresh)
+    django_logout(request._request)
     return response
 
 @extend_schema(
@@ -925,6 +945,7 @@ class GitHubJWTApi(APIView):
             },
         )
         set_refresh_cookie(response, refresh)
+        django_logout(request._request)
         return response
 
 def google_login_cancelled(request):
@@ -1041,6 +1062,7 @@ class BusinessRegistration(APIView):
     },
 )
 class ResendRegistrationOTPApi(APIView):
+    authentication_classes = []
     throttle_classes = [OTPRateThrottle]
 
     def post(self, request):
@@ -1064,7 +1086,7 @@ class ResendRegistrationOTPApi(APIView):
                 "REGISTRATION_EXPIRED",
             )
 
-        if cache.get(cooldown_key):
+        if not cache.add(cooldown_key, True, timeout=60):
             return error_response(
                 "Please wait before requesting another OTP.", "OTP_COOLDOWN",
                 details={"retry_after": max(cache.ttl(cooldown_key), 0)},
@@ -1073,17 +1095,23 @@ class ResendRegistrationOTPApi(APIView):
 
         otp = str(secrets.randbelow(900000) + 100000)
 
+        try:
+            send_mail(
+                "Kosh Email Verification OTP",
+                f"Your Kosh email verification OTP is {otp}. "
+                "This OTP is valid for 5 minutes.",
+                None,
+                [email],
+            )
+        except Exception:
+            cache.delete(cooldown_key)
+            return error_response(
+                "Could not send the email. Please try again.", "EMAIL_SEND_FAILED",
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
         cache.delete(f"registration_attempts:{email}")
         cache.set(otp_key, otp, timeout=300)
-        cache.set(data_key, registration_data, timeout=300)  # keep the session alive
-        cache.set(cooldown_key, True, timeout=60)
-
-        send_mail(
-            "Kosh Email Verification OTP",
-            f"Your Kosh email verification OTP is {otp}. "
-            "This OTP is valid for 5 minutes.",
-            None,
-            [email],
-        )
+        cache.set(data_key, registration_data, timeout=300)
 
         return success_response("OTP has been resent to your email.")

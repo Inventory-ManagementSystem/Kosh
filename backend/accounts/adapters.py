@@ -11,6 +11,15 @@ def _redirect(error):
 
 
 class KoshSocialAccountAdapter(DefaultSocialAccountAdapter):
+    def save_user(self, request, sociallogin, form=None):
+        user = super().save_user(request, sociallogin, form)
+        name = f"{user.first_name} {user.last_name}".strip()
+        if not name:
+            name = (sociallogin.account.extra_data.get("name") or "").strip()
+        if name:
+            user.profile.name = name[:50]  # Profile.name has max_length=50
+            user.profile.save(update_fields=["name"])
+        return user
     def is_auto_signup_allowed(self, request, sociallogin):
         if not any(e.verified for e in sociallogin.email_addresses):
             _redirect("email_not_verified")

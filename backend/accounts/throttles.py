@@ -32,3 +32,11 @@ class BusinessRegistrationThrottle(UserRateThrottle):
 class TokenRefreshRateThrottle(UserRateThrottle):
     scope = "token_refresh"
     rate = "10/min"
+
+class ChangePasswordThrottle(UserRateThrottle):
+    scope = "change_password"
+    rate = "5/hour"
+
+class ResetPasswordThrottle(UserRateThrottle):
+    scope = "reset_password"
+    rate = "10/hour"
