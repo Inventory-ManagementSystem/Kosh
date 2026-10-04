@@ -2,7 +2,8 @@ from django.shortcuts import render
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from .models import Business, Profile
+from .models import Business, Profile, Employee, EmployeeInvite
+from .utils import get_role, get_owned_business, invite_cutoff, purge_expired_invites
 from .serializers import (
   RegisterSerializer,
   LoginSerializer,
@@ -13,6 +14,7 @@ from .serializers import (
   BusinessRegistrationSerializer,
   VerifyRegistrationOTPSerializer,
   ResendRegistrationOTPSerializer,
+  InviteEmployeeSerializer,
 
 )
 from rest_framework.permissions import IsAuthenticated
@@ -48,6 +50,7 @@ from .throttles import (
     TokenRefreshRateThrottle,
     ChangePasswordThrottle,
     ResetPasswordThrottle,
+    InviteEmployeeThrottle,
 )
 from rest_framework.throttling import (UserRateThrottle)
 from django.shortcuts import redirect
@@ -180,6 +183,9 @@ class CookieTokenRefreshView(APIView):
                 err_example("Cooldown Active", "Please wait before requesting another OTP.",
                             "OTP_COOLDOWN", details={"retry_after": 43}),
                 THROTTLED_EXAMPLE),
+        503: resp("Email could not be sent.",
+            err_example("Email Failed", "Could not send the email. Please try again.",
+                        "EMAIL_SEND_FAILED")),
     },
 )
 class RegisterApi(APIView):
@@ -232,7 +238,7 @@ class RegisterApi(APIView):
             timeout=300,
         )
 
-        return success_response("OTP has been resent to your email.")
+        return success_response("OTP has been sent to your email.")
 
 @extend_schema(
     summary="Verify Registration OTP",
@@ -378,7 +384,7 @@ class VerifyRegistrationOTPApi(APIView):
     responses={
         200: resp("Login successful. The refresh token is set as an HttpOnly cookie.",
                 ok_example("Login Success", "Login successful.",
-                            data={"access": "eyJhbGciOiJIUzI1NiIs...", "has_business": False})),
+                            data={"access": "eyJhbGciOiJIUzI1NiIs...", "has_business": False, "role": None})),
         400: resp("Invalid credentials or validation error.",
                 err_example("Invalid Credentials", "Invalid email or password.", "INVALID_CREDENTIALS",
                             errors={"non_field_errors": ["Invalid email or password."]}),
@@ -399,7 +405,8 @@ class LoginApi(APIView):
       response = success_response(
                     "Login successful.",
                     data={"access": data["access"], 
-                        "has_business": has_business},
+                        "has_business": has_business,
+                        "role": get_role(user)},
                 )
       set_refresh_cookie(response, data["refresh"])
       return response
@@ -421,7 +428,7 @@ class LoginApi(APIView):
     responses={
         200: resp("Profile retrieved.",
                 ok_example("Profile Success", "Profile retrieved.",
-                            data={"id": 1, "name": "John Doe", "email": "john@example.com"})),
+                            data={"id": 1, "name": "John Doe", "email": "john@example.com", "role": None})),
         401: UNAUTHORIZED_RESPONSE,
     },
 )
@@ -434,6 +441,7 @@ class ProfileApi(APIView):
         "id": user.id,
         "name": user.profile.name,
         "email": user.email,
+        "role": get_role(user),
     })
 
 
@@ -865,9 +873,9 @@ class ChangePasswordApi(APIView):
     responses={
         200: resp("Login successful. The refresh token is set as an HttpOnly cookie.",
                 ok_example("Google Login Without Business", "Login successful.",
-                            data={"access": "eyJhbGciOiJIUzI1NiIs...", "has_business": False}),
+                            data={"access": "eyJhbGciOiJIUzI1NiIs...", "has_business": False, "role": None}),
                 ok_example("Google Login With Business", "Login successful.",
-                            data={"access": "eyJhbGciOiJIUzI1NiIs...", "has_business": True})),
+                            data={"access": "eyJhbGciOiJIUzI1NiIs...", "has_business": True, "role": "owner"})),
         401: resp("Google authentication failed.",
                 err_example("Google Authentication Failed", "Google authentication failed.",
                             "GOOGLE_AUTH_FAILED")),
@@ -895,6 +903,7 @@ class GoogleJWTApi(APIView):
         data={
             "access": str(refresh.access_token),
             "has_business": has_business,
+            "role": get_role(user)
         },
     )
     set_refresh_cookie(response, refresh)
@@ -910,9 +919,9 @@ class GoogleJWTApi(APIView):
     responses={
         200: resp("Login successful. The refresh token is set as an HttpOnly cookie.",
                 ok_example("Github Login Without Business", "Login successful.",
-                            data={"access": "eyJhbGciOiJIUzI1NiIs...", "has_business": False}),
+                            data={"access": "eyJhbGciOiJIUzI1NiIs...", "has_business": False, "role": None}),
                 ok_example("Github Login With Business", "Login successful.",
-                            data={"access": "eyJhbGciOiJIUzI1NiIs...", "has_business": True})),
+                            data={"access": "eyJhbGciOiJIUzI1NiIs...", "has_business": True, "role": "owner"})),
         401: resp("Github authentication failed.",
                 err_example("Github Authentication Failed", "Github authentication failed.",
                             "GITHUB_AUTH_FAILED")),
@@ -942,6 +951,7 @@ class GitHubJWTApi(APIView):
             data={
                 "access": str(refresh.access_token),
                 "has_business": has_business,
+                "role": get_role(user)
             },
         )
         set_refresh_cookie(response, refresh)
@@ -991,13 +1001,20 @@ def google_login_cancelled(request):
         401: UNAUTHORIZED_RESPONSE,
         409: resp("Business already registered for this user.",
                 err_example("Business Already Registered", "Business is already registered.",
-                            "BUSINESS_EXISTS")),
+                            "BUSINESS_EXISTS"),
+                err_example("Is Employee", "Employees cannot register a business.", 
+                            "EMPLOYEE_CANNOT_REGISTER_BUSINESS")),
     },
 )
 class BusinessRegistration(APIView):
   permission_classes = [IsAuthenticated]
   throttle_classes=[BusinessRegistrationThrottle]
   def post(self, request):
+    if Employee.objects.filter(user=request.user).exists():
+        return error_response(
+            "Employees cannot register a business.", "EMPLOYEE_CANNOT_REGISTER_BUSINESS",
+            status=status.HTTP_409_CONFLICT,
+        )
     if Business.objects.filter(owner=request.user).exists():
       return error_response(
             "Business is already registered.", "BUSINESS_EXISTS",
@@ -1017,6 +1034,8 @@ class BusinessRegistration(APIView):
             "Business is already registered.", "BUSINESS_EXISTS",
             status=status.HTTP_409_CONFLICT,
         )
+
+    EmployeeInvite.objects.filter(email__iexact=request.user.email).delete()
 
     return success_response(
         "Business registered successfully.",
@@ -1059,6 +1078,9 @@ class BusinessRegistration(APIView):
                               "Please wait before requesting another OTP.",
                               "OTP_COOLDOWN", details={"retry_after": 45}),
                   THROTTLED_EXAMPLE),
+        503: resp("Email could not be sent.",
+            err_example("Email Failed", "Could not send the email. Please try again.",
+                        "EMAIL_SEND_FAILED")),
     },
 )
 class ResendRegistrationOTPApi(APIView):
@@ -1115,3 +1137,204 @@ class ResendRegistrationOTPApi(APIView):
         cache.set(data_key, registration_data, timeout=300)
 
         return success_response("OTP has been resent to your email.")
+
+@extend_schema(
+    summary="Invite Employee",
+    description=(
+        "Owner only. Creates a pending invite for the email, with an optional phone "
+        "number for the owner's reference. The person must register (or log in) with "
+        "that email and accept the invite. Invites expire after 14 days."
+    ),
+    request=InviteEmployeeSerializer,
+    responses={
+        201: resp("Invite created.",
+                  ok_example("Invite Created", "Invite created.",
+                             data={"id": 1, "email": "ravi@example.com",
+                                   "phone": "9876543210", "status": "pending"})),
+        400: resp("Validation error, self-invite, or invite limit.",
+                  err_example("Validation Error", "Validation failed.", "VALIDATION_ERROR",
+                              errors={"phone": ["Enter a valid phone number (10-15 digits, optional leading +)."]}),
+                  err_example("Self Invite", "You cannot invite yourself.", "CANNOT_INVITE_SELF"),
+                  err_example("Limit Reached", "Too many pending invites. Cancel some first.",
+                              "INVITE_LIMIT_REACHED")),
+        401: UNAUTHORIZED_RESPONSE,
+        403: resp("Not a business owner.",
+                  err_example("Not Owner", "Only business owners can manage employees.",
+                              "NOT_BUSINESS_OWNER")),
+        409: resp("Already invited, or already an employee here.",
+                  err_example("Invite Exists", "This email already has a pending invite.",
+                              "INVITE_EXISTS"),
+                  err_example("Already Employee", "This person already works for your business.",
+                              "ALREADY_EMPLOYEE")),
+        429: resp("Too many requests.", THROTTLED_EXAMPLE),
+    },
+)
+class InviteEmployeeApi(APIView):
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [InviteEmployeeThrottle]
+
+    def post(self, request):
+        business = get_owned_business(request.user)
+        if business is None:
+            return error_response(
+                "Only business owners can manage employees.", "NOT_BUSINESS_OWNER",
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        serializer = InviteEmployeeSerializer(data=request.data)
+        if not serializer.is_valid():
+            return error_response(
+                "Validation failed.", "VALIDATION_ERROR", errors=serializer.errors,
+            )
+        email = serializer.validated_data["email"]
+        phone = serializer.validated_data.get("phone", "")
+
+        if email == (request.user.email or "").lower():
+            return error_response("You cannot invite yourself.", "CANNOT_INVITE_SELF")
+
+        if Employee.objects.filter(business=business, user__email__iexact=email).exists():
+            return error_response(
+                "This person already works for your business.", "ALREADY_EMPLOYEE",
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        purge_expired_invites(business)  # expired rows must go first, or they block re-inviting
+
+        pending = EmployeeInvite.objects.filter(business=business, status="pending")
+        if pending.count() >= 20:
+            return error_response(
+                "Too many pending invites. Cancel some first.", "INVITE_LIMIT_REACHED",
+            )
+
+        try:
+            with transaction.atomic():
+                invite = EmployeeInvite.objects.create(
+                    business=business, email=email, phone=phone
+                )
+        except IntegrityError:
+            return error_response(
+                "This email already has a pending invite.", "INVITE_EXISTS",
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        return success_response(
+            "Invite created.",
+            data={"id": invite.id, "email": invite.email,
+                  "phone": invite.phone, "status": invite.status},
+            status=status.HTTP_201_CREATED,
+        )
+
+
+@extend_schema(
+    summary="List Employees and Pending Invites",
+    description="Owner only. Returns the business's employees and its pending invites.",
+    responses={
+        200: resp("Employees and invites.",
+                  ok_example("Employees", "Employees retrieved.",
+                             data={"employees": [{"id": 1, "name": "Ravi", "email": "ravi@example.com",
+                                                  "phone": "9876543210",
+                                                  "joined_at": "2026-10-04T10:00:00Z"}],
+                                   "invites": [{"id": 2, "email": "sita@example.com", "phone": "",
+                                                "created_at": "2026-10-04T10:05:00Z"}]})),
+        401: UNAUTHORIZED_RESPONSE,
+        403: resp("Not a business owner.",
+                  err_example("Not Owner", "Only business owners can manage employees.",
+                              "NOT_BUSINESS_OWNER")),
+    },
+)
+class EmployeeListApi(APIView):
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [UserRateThrottle]
+
+    def get(self, request):
+        business = get_owned_business(request.user)
+        if business is None:
+            return error_response(
+                "Only business owners can manage employees.", "NOT_BUSINESS_OWNER",
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        purge_expired_invites(business)
+
+        employees = Employee.objects.filter(business=business).select_related("user__profile")
+        invites = EmployeeInvite.objects.filter(business=business, status="pending")
+
+        return success_response("Employees retrieved.", data={
+            "employees": [
+                {"id": e.id, "name": e.user.profile.name, "email": e.user.email,
+                 "phone": e.phone, "joined_at": e.created_at}
+                for e in employees
+            ],
+            "invites": [
+                {"id": i.id, "email": i.email, "phone": i.phone, "created_at": i.created_at}
+                for i in invites
+            ],
+        })
+
+
+@extend_schema(
+    summary="Cancel Pending Invite",
+    description="Owner only. Deletes a pending invite of the owner's business.",
+    request=None,
+    responses={
+        200: resp("Invite cancelled.", ok_example("Cancelled", "Invite cancelled.")),
+        401: UNAUTHORIZED_RESPONSE,
+        403: resp("Not a business owner.",
+                  err_example("Not Owner", "Only business owners can manage employees.",
+                              "NOT_BUSINESS_OWNER")),
+        404: resp("No such pending invite.",
+                  err_example("Not Found", "Invite not found.", "INVITE_NOT_FOUND")),
+    },
+)
+class CancelInviteApi(APIView):
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [UserRateThrottle]
+
+    def delete(self, request, invite_id):
+        business = get_owned_business(request.user)
+        if business is None:
+            return error_response(
+                "Only business owners can manage employees.", "NOT_BUSINESS_OWNER",
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        deleted, _ = EmployeeInvite.objects.filter(
+            id=invite_id, business=business, status="pending"
+        ).delete()
+        if not deleted:
+            return error_response(
+                "Invite not found.", "INVITE_NOT_FOUND", status=status.HTTP_404_NOT_FOUND,
+            )
+        return success_response("Invite cancelled.")
+
+
+@extend_schema(
+    summary="Remove Employee",
+    description="Owner only. Removes an employee from the owner's business.",
+    request=None,
+    responses={
+        200: resp("Employee removed.", ok_example("Removed", "Employee removed.")),
+        401: UNAUTHORIZED_RESPONSE,
+        403: resp("Not a business owner.",
+                  err_example("Not Owner", "Only business owners can manage employees.",
+                              "NOT_BUSINESS_OWNER")),
+        404: resp("No such employee.",
+                  err_example("Not Found", "Employee not found.", "EMPLOYEE_NOT_FOUND")),
+    },
+)
+class RemoveEmployeeApi(APIView):
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [UserRateThrottle]
+
+    def delete(self, request, employee_id):
+        business = get_owned_business(request.user)
+        if business is None:
+            return error_response(
+                "Only business owners can manage employees.", "NOT_BUSINESS_OWNER",
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        deleted, _ = Employee.objects.filter(id=employee_id, business=business).delete()
+        if not deleted:
+            return error_response(
+                "Employee not found.", "EMPLOYEE_NOT_FOUND", status=status.HTTP_404_NOT_FOUND,
+            )
+        return success_response("Employee removed.")

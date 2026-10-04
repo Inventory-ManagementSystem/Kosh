@@ -170,3 +170,18 @@ class ResendRegistrationOTPSerializer(serializers.Serializer):
 
   def validate_email(self, value):
     return value.lower()
+
+class InviteEmployeeSerializer(serializers.Serializer):
+  email = serializers.EmailField()
+  phone = serializers.CharField(required=False, allow_blank=True, max_length=20)
+
+  def validate_email(self, value):
+    return value.lower()
+
+  def validate_phone(self, value):
+    cleaned = re.sub(r"[\s-]", "", value)
+    if cleaned and not re.fullmatch(r"\+?[0-9]{10,15}", cleaned):
+      raise serializers.ValidationError(
+        "Enter a valid phone number (10-15 digits, optional leading +)."
+      )
+    return cleaned
