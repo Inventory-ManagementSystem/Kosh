@@ -19,4 +19,9 @@ urlpatterns = [
   path("business/register/",views.BusinessRegistration.as_view(),name="business-register"),
   path("verify-registration-otp/",views.VerifyRegistrationOTPApi.as_view(), name="verify_registration_otp",),
   path("resend-registration-otp/", views.ResendRegistrationOTPApi.as_view(), name="resend-registration-otp"),
+  path("employees/", views.EmployeeListApi.as_view(), name="employee-list"),
+  path("employees/invite/", views.InviteEmployeeApi.as_view(), name="employee-invite"),
+  path("employees/invites/<int:invite_id>/", views.CancelInviteApi.as_view(), name="invite-cancel"),
+  path("employees/<int:employee_id>/", views.RemoveEmployeeApi.as_view(), name="employee-remove"),
+
 ]
