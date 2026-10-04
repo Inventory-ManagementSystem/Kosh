@@ -1338,3 +1338,126 @@ class RemoveEmployeeApi(APIView):
                 "Employee not found.", "EMPLOYEE_NOT_FOUND", status=status.HTTP_404_NOT_FOUND,
             )
         return success_response("Employee removed.")
+
+@extend_schema(
+    summary="My Pending Invites",
+    description=(
+        "Pending, unexpired employee invites addressed to the logged-in user's email. "
+        "Call this only after the user chose the Employee path."
+    ),
+    responses={
+        200: resp("Pending invites.",
+                  ok_example("Invites", "Invites retrieved.",
+                             data={"invites": [{"id": 1, "business_name": "Kosh Technologies",
+                                                "created_at": "2026-10-04T10:00:00Z"}]})),
+        401: UNAUTHORIZED_RESPONSE,
+    },
+)
+class MyInvitesApi(APIView):
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [UserRateThrottle]
+
+    def get(self, request):
+        invites = EmployeeInvite.objects.filter(
+            email__iexact=request.user.email, status="pending",
+            created_at__gte=invite_cutoff(),
+        ).select_related("business")
+        return success_response("Invites retrieved.", data={
+            "invites": [
+                {"id": i.id, "business_name": i.business.business_name,
+                 "created_at": i.created_at}
+                for i in invites
+            ]
+        })
+
+
+@extend_schema(
+    summary="Accept Invite",
+    description=(
+        "Accepts a pending invite addressed to the logged-in user's email and makes "
+        "them an employee of that business. Fails if they already own or work for a business."
+    ),
+    request=None,
+    responses={
+        200: resp("Invite accepted.",
+                  ok_example("Accepted", "Invite accepted.",
+                             data={"role": "employee",
+                                   "business": {"id": 1, "business_name": "Kosh Technologies"}})),
+        401: UNAUTHORIZED_RESPONSE,
+        404: resp("No such pending invite for this user.",
+                  err_example("Not Found", "Invite not found.", "INVITE_NOT_FOUND")),
+        409: resp("User already has a role.",
+                  err_example("Already Owner", "You already own a business.", "ALREADY_OWNER"),
+                  err_example("Already Employee", "You already work for a business.",
+                              "ALREADY_EMPLOYEE")),
+    },
+)
+class AcceptInviteApi(APIView):
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [UserRateThrottle]
+
+    def post(self, request, invite_id):
+        user = request.user
+        try:
+            with transaction.atomic():
+                invite = (
+                    EmployeeInvite.objects.select_for_update()
+                    .filter(id=invite_id, email__iexact=user.email,
+                            status="pending", created_at__gte=invite_cutoff())
+                    .first()
+                )
+                if invite is None:
+                    return error_response(
+                        "Invite not found.", "INVITE_NOT_FOUND",
+                        status=status.HTTP_404_NOT_FOUND,
+                    )
+                if Business.objects.filter(owner=user).exists():
+                    return error_response(
+                        "You already own a business.", "ALREADY_OWNER",
+                        status=status.HTTP_409_CONFLICT,
+                    )
+                if Employee.objects.filter(user=user).exists():
+                    return error_response(
+                        "You already work for a business.", "ALREADY_EMPLOYEE",
+                        status=status.HTTP_409_CONFLICT,
+                    )
+
+                business = invite.business
+                Employee.objects.create(user=user, business=business, phone=invite.phone)
+                EmployeeInvite.objects.filter(email__iexact=user.email).delete()
+        except IntegrityError:
+            return error_response(
+                "You already work for a business.", "ALREADY_EMPLOYEE",
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        return success_response("Invite accepted.", data={
+            "role": "employee",
+            "business": {"id": business.id, "business_name": business.business_name},
+        })
+
+
+@extend_schema(
+    summary="Decline Invite",
+    description="Declines (deletes) a pending invite addressed to the logged-in user's email.",
+    request=None,
+    responses={
+        200: resp("Invite declined.", ok_example("Declined", "Invite declined.")),
+        401: UNAUTHORIZED_RESPONSE,
+        404: resp("No such pending invite for this user.",
+                  err_example("Not Found", "Invite not found.", "INVITE_NOT_FOUND")),
+    },
+)
+class DeclineInviteApi(APIView):
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [UserRateThrottle]
+
+    def post(self, request, invite_id):
+        deleted, _ = EmployeeInvite.objects.filter(
+            id=invite_id, email__iexact=request.user.email, status="pending"
+        ).delete()
+        if not deleted:
+            return error_response(
+                "Invite not found.", "INVITE_NOT_FOUND", status=status.HTTP_404_NOT_FOUND,
+            )
+        return success_response("Invite declined.")
