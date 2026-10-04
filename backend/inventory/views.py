@@ -5,9 +5,10 @@ from .permissions import HasBusiness
 from rest_framework.views import APIView
 from accounts.responses import success_response
 from .models import Product
-from .serializers import ProductSerializer
+from .serializers import ProductSerializer, StockAdjustmentSerializer
 from .throttles import InventoryThrottle
-
+from django.db import transaction
+from rest_framework.exceptions import ValidationError
 
 class ProductListCreateApi(APIView):
   permission_classes = [IsAuthenticated, HasBusiness]
@@ -126,4 +127,48 @@ class ProductDetailApi(APIView):
     product.delete()
     return success_response(
       "Product deleted.",
+    )
+
+
+class ProductAdjustStockApi(APIView):
+  permission_classes = [IsAuthenticated, HasBusiness]
+  throttle_classes = [InventoryThrottle]
+  def post(self, request, pk):
+    input_serializer = StockAdjustmentSerializer(
+      data=request.data
+    )
+    input_serializer.is_valid(
+      raise_exception=True
+    )
+    change = input_serializer.validated_data[
+      "change"
+    ]
+
+    with transaction.atomic():
+      product = get_object_or_404(
+        Product.objects.select_for_update(),
+        pk=pk,
+        business=request.user.business,
+      )
+      new_quantity = (product.quantity + change)
+      if new_quantity < 0:
+        raise ValidationError({
+          "change": "Insufficient stock."
+        })
+
+      product.quantity = new_quantity
+      product.save(
+        update_fields=[
+          "quantity",
+          "updated_at",
+        ]
+      )
+
+    serializer = ProductSerializer(
+      product,
+      context={"request": request},
+    )
+    return success_response(
+      "Stock updated.",
+      serializer.data,
     )

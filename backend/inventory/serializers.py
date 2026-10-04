@@ -120,3 +120,22 @@ class ProductSerializer(serializers.ModelSerializer):
             })
 
         return attrs
+
+
+class StockAdjustmentSerializer(serializers.Serializer):
+    change = serializers.IntegerField(
+        min_value=-1_000_000,
+        max_value=1_000_000,
+    )
+    reason = serializers.CharField(
+        max_length=255,
+        required=False,
+        allow_blank=True,
+    )
+
+    def validate_change(self, value):
+        if value == 0:
+            raise serializers.ValidationError(
+                "Change cannot be zero."
+            )
+        return value
