@@ -32,6 +32,7 @@ urlpatterns = [
     path('accounts/signup/',RedirectView.as_view(url="https://koshh.me/signup")),
     path('accounts/3rdparty/login/error/', RedirectView.as_view(url="https://koshh.me/oauth/callback?error=login_failed")),
     path('accounts/',include('allauth.urls')),
+    path('inventory/', include('inventory.urls')),
     path('', HealthAPIView.as_view(), name='health'),
     path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
     path('api/docs/',SpectacularSwaggerView.as_view(url_name='schema'),name='swagger-ui'),
