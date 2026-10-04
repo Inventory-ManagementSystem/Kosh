@@ -40,3 +40,7 @@ class ChangePasswordThrottle(UserRateThrottle):
 class ResetPasswordThrottle(UserRateThrottle):
     scope = "reset_password"
     rate = "10/hour"
+
+class InviteEmployeeThrottle(UserRateThrottle):
+    scope = "employee_invite"
+    rate = "20/hour"
