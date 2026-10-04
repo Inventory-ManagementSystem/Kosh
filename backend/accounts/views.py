@@ -34,6 +34,8 @@ from django.core.cache import cache
 from django.contrib.auth.hashers import make_password
 from django.db import IntegrityError, transaction
 from django.conf import settings
+import logging
+logger = logging.getLogger(__name__)
 
 from drf_spectacular.utils import (extend_schema,OpenApiResponse,OpenApiExample)
 from drf_spectacular.types import OpenApiTypes
@@ -335,6 +337,13 @@ class VerifyRegistrationOTPApi(APIView):
             return error_response("Invalid OTP.", "INVALID_OTP", 
                                   details={"remaining_attempts": 5 - attempts})
 
+        if User.objects.filter(email__iexact=email).exists():
+            cache.delete(otp_key)
+            cache.delete(data_key)
+            cache.delete(attempts_key)
+            return error_response("Email already exists.", "EMAIL_EXISTS",
+                                  status=status.HTTP_409_CONFLICT)
+    
         try:
             with transaction.atomic():
                 user = User.objects.create(
@@ -556,15 +565,16 @@ class ForgotPasswordApi(APIView):
                 timeout=300
             )
 
-
-
-            send_mail(
-                "Kosh Password Reset OTP",
-                f"Your password reset OTP is {otp}. "
-                "This OTP is valid for 5 minutes.",
-                None,
-                [email],
-            )
+            try:
+                send_mail(
+                    "Kosh Password Reset OTP",
+                    f"Your password reset OTP is {otp}. "
+                    "This OTP is valid for 5 minutes.",
+                    None,
+                    [email],
+                )
+            except Exception:
+                logger.exception("Password reset email failed")
 
         return success_response(
             "If an account exists with this email, "
