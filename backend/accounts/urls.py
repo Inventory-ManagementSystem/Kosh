@@ -23,5 +23,8 @@ urlpatterns = [
   path("employees/invite/", views.InviteEmployeeApi.as_view(), name="employee-invite"),
   path("employees/invites/<int:invite_id>/", views.CancelInviteApi.as_view(), name="invite-cancel"),
   path("employees/<int:employee_id>/", views.RemoveEmployeeApi.as_view(), name="employee-remove"),
-
+  path("invites/mine/", views.MyInvitesApi.as_view(), name="my-invites"),
+  path("invites/<int:invite_id>/accept/", views.AcceptInviteApi.as_view(), name="invite-accept"),
+  path("invites/<int:invite_id>/decline/", views.DeclineInviteApi.as_view(), name="invite-decline"),
+  
 ]
