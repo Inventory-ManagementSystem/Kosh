@@ -10,4 +10,7 @@ urlpatterns = [
 
   path("categories/",views.CategoryListCreateApi.as_view(),name="category-list",),
   path("categories/<uuid:pk>/",views.CategoryDetailApi.as_view(),name="category-detail",),
+
+  path("warehouses/",views.WarehouseListCreateApi.as_view(),name="warehouse-list",),
+  path("warehouses/<uuid:pk>/",views.WarehouseDetailApi.as_view(),name="warehouse-detail",),
 ]
