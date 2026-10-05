@@ -10,6 +10,7 @@ from .throttles import InventoryThrottle
 from django.db import transaction
 from rest_framework.exceptions import ValidationError
 from rest_framework.pagination import PageNumberPagination
+from rest_framework.parsers import MultiPartParser, FormParser
 
 class InventoryPagination(PageNumberPagination):
     page_size = 10
@@ -20,6 +21,7 @@ class InventoryPagination(PageNumberPagination):
 class ProductListCreateApi(APIView):
   permission_classes = [IsAuthenticated, HasBusiness]
   throttle_classes = [InventoryThrottle]
+  parser_classes = [MultiPartParser, FormParser]
   def get(self, request):
     products = (
     Product.objects.filter(business=request.user.business).select_related(
@@ -74,6 +76,7 @@ class ProductListCreateApi(APIView):
 class ProductDetailApi(APIView):
   permission_classes = [IsAuthenticated, HasBusiness]
   throttle_classes = [InventoryThrottle]
+  parser_classes = [MultiPartParser, FormParser]
   def get_product(self, request, pk):
     return get_object_or_404(
       Product.objects.select_related(
