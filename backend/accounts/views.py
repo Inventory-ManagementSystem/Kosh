@@ -325,7 +325,7 @@ class VerifyRegistrationOTPApi(APIView):
             return error_response("Too many incorrect OTP attempts. Please register again.", "OTP_ATTEMPTS_EXCEEDED", 
                                   status=status.HTTP_429_TOO_MANY_REQUESTS)
 
-        if submitted_otp != stored_otp:
+        if not secrets.compare_digest(str(stored_otp).encode(), submitted_otp.encode()):
             attempts += 1
 
             cache.set(
