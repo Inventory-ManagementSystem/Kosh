@@ -9,6 +9,13 @@ from .serializers import ProductSerializer, StockAdjustmentSerializer, CategoryS
 from .throttles import InventoryThrottle
 from django.db import transaction
 from rest_framework.exceptions import ValidationError
+from rest_framework.pagination import PageNumberPagination
+
+class InventoryPagination(PageNumberPagination):
+    page_size = 10
+    page_size_query_param = "page_size"
+    max_page_size = 50
+
 
 class ProductListCreateApi(APIView):
   permission_classes = [IsAuthenticated, HasBusiness]
@@ -43,15 +50,10 @@ class ProductListCreateApi(APIView):
       if all(field.lstrip("-") in allowed_fields for field in requested_fields):
         products = products.order_by(*requested_fields)
 
-    serializer = ProductSerializer(
-      products,
-      many=True,
-      context={"request": request},
-    )
-    return success_response(
-      "Product list fetched.",
-      serializer.data,
-    )
+    paginator = InventoryPagination()
+    page = paginator.paginate_queryset(products, request)
+    serializer = ProductSerializer(page, many=True, context={"request": request})
+    return paginator.get_paginated_response(serializer.data)
 
   def post(self, request):
     serializer = ProductSerializer(
