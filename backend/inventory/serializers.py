@@ -186,3 +186,31 @@ class CategorySerializer(serializers.ModelSerializer):
             "Category",
         )
         return value
+
+
+class WarehouseSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Warehouse
+        fields = [
+            "id",
+            "name",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "id",
+            "created_at",
+            "updated_at",
+        ]
+
+    def validate_name(self, value):
+        value = clean_name(value)
+        business = get_business(self.context)
+        check_name_is_unique(
+            Warehouse,
+            business,
+            value,
+            self.instance,
+            "Warehouse",
+        )
+        return value
