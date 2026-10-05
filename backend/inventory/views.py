@@ -4,8 +4,8 @@ from rest_framework.permissions import IsAuthenticated
 from .permissions import HasBusiness
 from rest_framework.views import APIView
 from accounts.responses import success_response
-from .models import Product
-from .serializers import ProductSerializer, StockAdjustmentSerializer
+from .models import Product, Category
+from .serializers import ProductSerializer, StockAdjustmentSerializer, CategorySerializer
 from .throttles import InventoryThrottle
 from django.db import transaction
 from rest_framework.exceptions import ValidationError
@@ -171,4 +171,115 @@ class ProductAdjustStockApi(APIView):
     return success_response(
       "Stock updated.",
       serializer.data,
+    )
+
+
+class CategoryListCreateApi(APIView):
+  permission_classes = [IsAuthenticated, HasBusiness]
+  throttle_classes = [InventoryThrottle]
+
+  def get(self, request):
+    categories = Category.objects.filter(
+      business=request.user.business
+    )
+    serializer = CategorySerializer(
+      categories,
+      many=True,
+      context={"request": request},
+    )
+    return success_response(
+      "Category list fetched.",
+      serializer.data,
+    )
+
+  def post(self, request):
+    serializer = CategorySerializer(
+      data=request.data,
+      context={"request": request},
+    )
+    serializer.is_valid(
+      raise_exception=True
+    )
+    serializer.save(
+      business=request.user.business
+    )
+    return success_response(
+      "Category created.",
+      serializer.data,
+      status=201,
+    )
+
+
+class CategoryDetailApi(APIView):
+  permission_classes = [IsAuthenticated, HasBusiness]
+  throttle_classes = [InventoryThrottle]
+
+  def get_category(self, request, pk):
+    category = get_object_or_404(
+      Category,
+      pk=pk,
+      business=request.user.business,
+    )
+    self.check_object_permissions(
+      request,
+      category,
+    )
+    return category
+
+  def get(self, request, pk):
+    category = self.get_category(
+      request,
+      pk,
+    )
+    serializer = CategorySerializer(
+      category,
+      context={"request": request},
+    )
+    return success_response(
+      "Category fetched.",
+      serializer.data,
+    )
+
+  def put(self, request, pk):
+    return self.update(
+      request,
+      pk,
+      partial=False,
+    )
+    
+  def patch(self, request, pk):
+    return self.update(
+      request,
+      pk,
+      partial=True,
+    )
+
+  def update(self, request, pk, partial):
+    category = self.get_category(
+      request,
+      pk,
+    )
+    serializer = CategorySerializer(
+      category,
+      data=request.data,
+      partial=partial,
+      context={"request": request},
+    )
+    serializer.is_valid(
+      raise_exception=True
+    )
+    serializer.save()
+    return success_response(
+      "Category updated.",
+      serializer.data,
+    )
+
+  def delete(self, request, pk):
+    category = self.get_category(
+      request,
+      pk,
+    )
+    category.delete()
+    return success_response(
+      "Category deleted."
     )

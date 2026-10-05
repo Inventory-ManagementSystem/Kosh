@@ -18,6 +18,25 @@ def clean_name(value):
         )
     return value
 
+def check_name_is_unique(
+    model,
+    business,
+    name,
+    instance,
+    model_name,
+    ):
+    queryset = model.objects.filter(
+        business=business,
+        name__iexact=name,
+    )
+    if instance:
+        queryset = queryset.exclude(
+            pk=instance.pk
+        )
+    if queryset.exists():
+        raise serializers.ValidationError(
+            f"{model_name} with this name already exists."
+        )
 
 class ProductSerializer(serializers.ModelSerializer):
     category = serializers.PrimaryKeyRelatedField(
@@ -138,4 +157,32 @@ class StockAdjustmentSerializer(serializers.Serializer):
             raise serializers.ValidationError(
                 "Change cannot be zero."
             )
+        return value
+
+
+class CategorySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Category
+        fields = [
+            "id",
+            "name",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "id",
+            "created_at",
+            "updated_at",
+        ]
+
+    def validate_name(self, value):
+        value = clean_name(value)
+        business = get_business(self.context)
+        check_name_is_unique(
+            Category,
+            business,
+            value,
+            self.instance,
+            "Category",
+        )
         return value
