@@ -7,9 +7,9 @@ from .models import Category, Product, Warehouse
 @admin.register(Category)
 class CategoryAdmin(admin.ModelAdmin):
     list_display = ("name", "business", "created_at", "updated_at")
-    search_fields = ("name")
-    list_filter = ("business")
-    ordering = ("name")
+    search_fields = ("name",)
+    list_filter = ("business",)
+    ordering = ("name",)
 
 @admin.register(Product)
 class ProductAdmin(admin.ModelAdmin):
@@ -25,7 +25,7 @@ class ProductAdmin(admin.ModelAdmin):
     )
     search_fields = ("name", "sku")
     list_filter = ("category", "warehouse", "business")
-    ordering = ("-created_at")
+    ordering = ("-created_at",)
 
 
 @admin.register(Warehouse)
@@ -36,6 +36,6 @@ class WarehouseAdmin(admin.ModelAdmin):
         "created_at",
         "updated_at",
     )
-    search_fields = ("name")
-    list_filter = ("business")
-    ordering = ("name")
+    search_fields = ("name",)
+    list_filter = ("business",)
+    ordering = ("name",)
