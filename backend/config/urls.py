@@ -34,6 +34,7 @@ urlpatterns = [
     re_path(r'^accounts/(password|email|confirm-email|reauthenticate|inactive)/',
         RedirectView.as_view(url="https://koshh.me/login")),
     path('accounts/',include('allauth.urls')),
+    path('inventory/', include('inventory.urls')),
     path('', HealthAPIView.as_view(), name='health'),
     path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
     path('api/docs/',SpectacularSwaggerView.as_view(url_name='schema'),name='swagger-ui'),
