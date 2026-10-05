@@ -3,7 +3,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from .models import Business, Profile, Employee, EmployeeInvite
-from .utils import get_role, get_owned_business, invite_cutoff, purge_expired_invites
+from .utils import get_role, get_owned_business, invite_cutoff, purge_expired_invites, INVITE_TTL
 from .serializers import (
   RegisterSerializer,
   LoginSerializer,
@@ -1226,6 +1226,22 @@ class InviteEmployeeApi(APIView):
                 "This email already has a pending invite.", "INVITE_EXISTS",
                 status=status.HTTP_409_CONFLICT,
             )
+
+        try:
+            send_mail(
+                f"You've been invited to join {business.business_name} on Kosh",
+                (
+                    f"{business.business_name} has invited you to join their team on Kosh.\n\n"
+                    f"Sign up or log in with this email address ({invite.email}), "
+                    "choose the Employee option, and accept the invite:\n"
+                    f"{settings.FRONTEND_URL}/signup\n\n"
+                    f"This invite expires in {INVITE_TTL.days} days."
+                ),
+                None,
+                [invite.email],
+            )
+        except Exception:
+            logger.exception("Employee invite email failed")
 
         return success_response(
             "Invite created.",
