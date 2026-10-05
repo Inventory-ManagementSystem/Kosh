@@ -58,6 +58,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'drf_spectacular',
     'accounts.apps.AccountsConfig',
+    'inventory',
     'rest_framework_simplejwt.token_blacklist',
     'django.contrib.sites',
     'allauth',
@@ -196,6 +197,7 @@ REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_RATES": {
         "anon": "20/min",
         "user": "100/min",
+        "inventory":"60/min",
     },
 
     "EXCEPTION_HANDLER": "accounts.exception_handler.custom_exception_handler",
