@@ -17,6 +17,17 @@ def get_role(user):
 def get_owned_business(user):
     return Business.objects.filter(owner=user).first()
 
+def get_user_business(user):
+    business = Business.objects.filter(owner=user).first()
+    if business:
+        return business
+
+    employment = (
+        Employee.objects.filter(user=user, is_active=True)
+        .select_related("business")
+        .first()
+    )
+    return employment.business if employment else None
 
 def invite_cutoff():
     return timezone.now() - INVITE_TTL

@@ -68,6 +68,7 @@ INSTALLED_APPS = [
     'allauth.socialaccount.providers.github',
     'storages',
     'corsheaders',
+    'customers'
 ]
 
 JAZZMIN_SETTINGS = {

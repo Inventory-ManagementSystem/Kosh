@@ -21,3 +21,8 @@ def error_response(message, code, errors=None, details=None,
         },
         status=status,
     )
+
+def validation_error_response(serializer):
+    return error_response(
+        "Validation failed.", "VALIDATION_ERROR", errors=serializer.errors,
+    )
