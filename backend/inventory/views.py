@@ -10,7 +10,7 @@ from .throttles import InventoryThrottle
 from django.db import transaction
 from rest_framework.exceptions import ValidationError
 
-from rest_framework.parsers import MultiPartParser, FormParser
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from accounts.pagination import StandardPagination
 
 from .SwaggerDocs import (
@@ -32,7 +32,7 @@ class InventoryPagination(StandardPagination):
 class ProductListCreateApi(APIView):
   permission_classes = [IsAuthenticated, HasBusiness]
   throttle_classes = [InventoryThrottle]
-  parser_classes = [MultiPartParser, FormParser]
+  parser_classes = [MultiPartParser, FormParser, JSONParser]
 
   def validate_uuid(self, value, field_name):
     try:
@@ -100,7 +100,7 @@ class ProductListCreateApi(APIView):
 class ProductDetailApi(APIView):
   permission_classes = [IsAuthenticated, HasBusiness]
   throttle_classes = [InventoryThrottle]
-  parser_classes = [MultiPartParser, FormParser]
+  parser_classes = [MultiPartParser, FormParser, JSONParser]
   def get_product(self, request, pk):
     return get_object_or_404(
       Product.objects.select_related(

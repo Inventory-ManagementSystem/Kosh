@@ -95,11 +95,11 @@ def validation_cases(*cases):
     ],
   )
 
-MULTIPART_NOTE = (
-  "Send the body as `multipart/form-data` (form fields), not JSON; a JSON body is "
-  "rejected with 415 Unsupported Media Type. A picture can be uploaded in the `image` "
-  "file field. `category` and `warehouse` must be ids from this business; send the "
-  "field empty to clear it."
+PRODUCT_BODY_NOTE = (
+  "Accepts both `application/json` and `multipart/form-data`. Use JSON for normal "
+  "product data, and use `multipart/form-data` when uploading or replacing the "
+  "`image` file. `category` and `warehouse` must be ids from this business; send "
+  "the field empty to clear it."
 )
 
 QUANTITY_NOTE = (
@@ -188,7 +188,7 @@ product_list_create_docs = extend_schema_view(
       "Creates a product in the logged-in user's business. The business is set by "
       "the server, never by the request body. The `sku` is trimmed, stored in upper "
       "case and must be unique within the business. `quantity` sets the opening stock. "
-      + MULTIPART_NOTE
+      + PRODUCT_BODY_NOTE
     ),
     request=ProductSerializer,
     examples=[
@@ -236,7 +236,7 @@ product_detail_docs = extend_schema_view(
     summary="Replace Product",
     description=(
       "Full update. `name`, `sku` and `price` are required. "
-      + QUANTITY_NOTE + " " + MULTIPART_NOTE
+      + QUANTITY_NOTE + " " + PRODUCT_BODY_NOTE
     ),
     request=ProductSerializer,
     examples=[
@@ -262,7 +262,7 @@ product_detail_docs = extend_schema_view(
     summary="Update Product",
     description=(
       "Partial update. Send only the fields you want to change. "
-      + QUANTITY_NOTE + " " + MULTIPART_NOTE
+      + QUANTITY_NOTE + " " + PRODUCT_BODY_NOTE
     ),
     request=ProductSerializer,
     examples=[
