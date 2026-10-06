@@ -1,9 +1,7 @@
 from django.db import models
 
-# Create your models here.
-
-from django.db import models
 import uuid
+from django.db.models import Q
 
 
 class Customer(models.Model):
@@ -27,6 +25,15 @@ class Customer(models.Model):
     indexes = [
       models.Index(fields=["business", "name"]),
     ]
-
-  def __str__(self):
-    return self.name
+    constraints = [
+      models.UniqueConstraint(
+        fields=["business", "phone"],
+        condition=~Q(phone=""),
+        name="uniq_customer_phone_per_business",
+      ),
+      models.UniqueConstraint(
+        fields=["business", "email"],
+        condition=~Q(email=""),
+        name="uniq_customer_email_per_business",
+      ),
+    ]

@@ -6,7 +6,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 
 from accounts.permissions import HasBusinessAccess
-from accounts.responses import success_response, validation_error_response
+from django.db import IntegrityError
+from accounts.responses import success_response, validation_error_response, error_response
 from inventory.throttles import InventoryThrottle
 
 from .models import Customer
@@ -120,6 +121,10 @@ VALIDATION_RESPONSE = resp(
       401: UNAUTHORIZED_RESPONSE,
       403: FORBIDDEN_RESPONSE,
       429: resp("Too many write requests.", THROTTLED_EXAMPLE),
+      409: resp("Duplicate phone or email.",
+          err_example("Customer Exists",
+                      "A customer with this phone or email already exists.",
+                      "CUSTOMER_EXISTS")),
     },
   ),
 )
@@ -147,11 +152,21 @@ class CustomerListCreateApi(APIView):
     return success_response("Customer list fetched.", serializer.data)
 
   def post(self, request):
-    serializer = CustomerSerializer(data=request.data)
+    serializer = CustomerSerializer(
+      data=request.data,
+      context={"business": request.business},
+    )
     if not serializer.is_valid():
       return validation_error_response(serializer)
 
-    serializer.save(business=request.business)
+    try:
+      serializer.save(business=request.business)
+    except IntegrityError:
+      return error_response(
+        "A customer with this phone or email already exists.",
+        "CUSTOMER_EXISTS",
+        status=status.HTTP_409_CONFLICT,
+      )
     return success_response(
       "Customer created.",
       serializer.data,
@@ -181,6 +196,10 @@ class CustomerListCreateApi(APIView):
       403: FORBIDDEN_RESPONSE,
       404: NOT_FOUND_RESPONSE,
       429: resp("Too many write requests.", THROTTLED_EXAMPLE),
+      409: resp("Duplicate phone or email.",
+          err_example("Customer Exists",
+                      "A customer with this phone or email already exists.",
+                      "CUSTOMER_EXISTS")),
     },
   ),
   patch=extend_schema(
@@ -202,6 +221,10 @@ class CustomerListCreateApi(APIView):
       403: FORBIDDEN_RESPONSE,
       404: NOT_FOUND_RESPONSE,
       429: resp("Too many write requests.", THROTTLED_EXAMPLE),
+      409: resp("Duplicate phone or email.",
+          err_example("Customer Exists",
+                      "A customer with this phone or email already exists.",
+                      "CUSTOMER_EXISTS")),
     },
   ),
   delete=extend_schema(
@@ -242,14 +265,32 @@ class CustomerDetailApi(APIView):
 
   def update(self, request, pk, partial):
     customer = self.get_customer(request, pk)
-    serializer = CustomerSerializer(customer, data=request.data, partial=partial)
+    serializer = CustomerSerializer(
+      customer,
+      data=request.data,
+      partial=partial,
+      context={"business": request.business},
+    )
     if not serializer.is_valid():
       return validation_error_response(serializer)
 
-    serializer.save()
+    try:
+      serializer.save()
+    except IntegrityError:
+      return error_response(
+        "A customer with this phone or email already exists.",
+        "CUSTOMER_EXISTS",
+        status=status.HTTP_409_CONFLICT,
+      )
     return success_response("Customer updated.", serializer.data)
 
   def delete(self, request, pk):
+    if request.business.owner_id != request.user.id:
+      return error_response(
+        "Only the business owner can delete customers.",
+        "FORBIDDEN",
+        status=status.HTTP_403_FORBIDDEN,
+      )
     customer = self.get_customer(request, pk)
     customer.delete()
     return success_response("Customer deleted.")
