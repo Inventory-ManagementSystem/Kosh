@@ -85,6 +85,11 @@ class Product(models.Model):
   )
 
   name = models.CharField(max_length=255)
+  image = models.ImageField(
+    upload_to="products/",
+    null=True,
+    blank=True,
+  )
   sku = models.CharField(max_length=64)
   description = models.TextField(blank=True)
   price = models.DecimalField(
