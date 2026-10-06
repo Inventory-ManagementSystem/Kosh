@@ -12,6 +12,7 @@ from inventory.throttles import InventoryThrottle
 
 from .models import Customer
 from .serializers import CustomerSerializer
+from accounts.pagination import StandardPagination
 
 from drf_spectacular.utils import (
   extend_schema,
@@ -68,8 +69,9 @@ VALIDATION_RESPONSE = resp(
   get=extend_schema(
     summary="List Customers",
     description=(
-      "Returns all customers of the logged-in user's business. Works for both "
-      "owners and employees. Optionally filter with `search` and `is_active`."
+      "Returns a page of the logged-in user's business customers. Works for both "
+      "owners and employees. Optionally filter with `search` and `is_active`. "
+      "Results are paginated."
     ),
     parameters=[
       OpenApiParameter(
@@ -81,11 +83,24 @@ VALIDATION_RESPONSE = resp(
         enum=["true", "false"],
         description="Show only active or only inactive customers.",
       ),
+      OpenApiParameter(
+        "page", OpenApiTypes.INT, OpenApiParameter.QUERY,
+        description="Page number, starting at 1.",
+      ),
+      OpenApiParameter(
+        "page_size", OpenApiTypes.INT, OpenApiParameter.QUERY,
+        description="Customers per page. Default 10, maximum 50.",
+      ),
     ],
     responses={
-      200: resp("Customer list.",
-                ok_example("Customers", "Customer list fetched.",
-                           data=[CUSTOMER_EXAMPLE])),
+      200: resp("One page of customers.",
+                ok_example("Customer page", "Customer list fetched.",
+                           data={
+                             "count": 25,
+                             "next": "https://kosh.dev-sushant.me/customers/?page=2",
+                             "previous": None,
+                             "results": [CUSTOMER_EXAMPLE],
+                           })),
       401: UNAUTHORIZED_RESPONSE,
       403: FORBIDDEN_RESPONSE,
     },
@@ -148,8 +163,13 @@ class CustomerListCreateApi(APIView):
     if is_active in ("true", "false"):
       customers = customers.filter(is_active=(is_active == "true"))
 
-    serializer = CustomerSerializer(customers, many=True)
-    return success_response("Customer list fetched.", serializer.data)
+    customers = customers.order_by("name", "id")
+
+    paginator = StandardPagination()
+    paginator.message = "Customer list fetched."
+    page = paginator.paginate_queryset(customers, request, view=self)
+    serializer = CustomerSerializer(page, many=True)
+    return paginator.get_paginated_response(serializer.data)
 
   def post(self, request):
     serializer = CustomerSerializer(
