@@ -4,6 +4,7 @@ from django.contrib.auth import authenticate
 from rest_framework_simplejwt.tokens import RefreshToken
 from .models import Business
 import re
+from .validators import validate_phone_number
 
 
 NAME_REGEX = r'^[A-Za-z ]+$'
@@ -180,8 +181,4 @@ class InviteEmployeeSerializer(serializers.Serializer):
 
   def validate_phone(self, value):
     cleaned = re.sub(r"[\s-]", "", value)
-    if cleaned and not re.fullmatch(r"\+?[0-9]{10,15}", cleaned):
-      raise serializers.ValidationError(
-        "Enter a valid phone number (10-15 digits, optional leading +)."
-      )
-    return cleaned
+    return validate_phone_number(cleaned)
