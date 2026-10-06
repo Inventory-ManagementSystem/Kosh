@@ -72,7 +72,8 @@ INSTALLED_APPS = [
     'allauth.socialaccount.providers.github',
     'storages',
     'corsheaders',
-    'customers'
+    'customers',
+    'django_cleanup.apps.CleanupConfig',
 ]
 
 JAZZMIN_SETTINGS = {
