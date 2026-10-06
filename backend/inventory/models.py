@@ -1,7 +1,8 @@
 from django.db import models
 import uuid
-from django.core.validators import MinValueValidator
+from django.core.validators import MinValueValidator, FileExtensionValidator
 from django.db.models.functions import Lower
+from django.core.exceptions import ValidationError
 
 # Create your models here.
 
@@ -58,6 +59,24 @@ class Warehouse(models.Model):
   def __str__(self):
     return self.name
 
+
+MAX_IMAGE_SIZE = 5 * 1024 * 1024
+ALLOWED_IMAGE_EXTENSIONS = ["jpg", "jpeg", "png", "webp"]
+
+def validate_image_size(image):
+  if image.size > MAX_IMAGE_SIZE:
+    raise ValidationError("Image size must not exceed 5 MB.")
+
+def validate_image_content(image):
+  try:
+    from PIL import Image
+    Image.open(image).verify()
+  except Exception:
+    raise ValidationError(
+      "Invalid image file. Please upload a valid image."
+    )
+
+
 class Product(models.Model):
 
   OUT_OF_STOCK = "Out of Stock"
@@ -89,6 +108,13 @@ class Product(models.Model):
     upload_to="products/",
     null=True,
     blank=True,
+    validators=[
+      validate_image_size,
+      validate_image_content,
+      FileExtensionValidator(
+        allowed_extensions=ALLOWED_IMAGE_EXTENSIONS
+      ),
+    ],
   )
   sku = models.CharField(max_length=64)
   description = models.TextField(blank=True)
