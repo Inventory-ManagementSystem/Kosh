@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from .models import Customer
 import re
+from accounts.validators import validate_phone_number
 
 
 class CustomerSerializer(serializers.ModelSerializer):
@@ -29,11 +30,7 @@ class CustomerSerializer(serializers.ModelSerializer):
 
   def validate_phone(self, value):
     cleaned = re.sub(r"[\s-]", "", value)
-    if cleaned and not re.fullmatch(r"\+?[0-9]{10,15}", cleaned):
-      raise serializers.ValidationError(
-        "Enter a valid phone number (10-15 digits, optional leading +)."
-      )
-    return cleaned
+    return validate_phone_number(cleaned)
 
   def validate(self, attrs):
     others = Customer.objects.filter(business=self.context["business"])

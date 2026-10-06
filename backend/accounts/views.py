@@ -1163,7 +1163,7 @@ class ResendRegistrationOTPApi(APIView):
                                    "phone": "9876543210", "status": "pending"})),
         400: resp("Validation error, self-invite, or invite limit.",
                   err_example("Validation Error", "Validation failed.", "VALIDATION_ERROR",
-                              errors={"phone": ["Enter a valid phone number (10-15 digits, optional leading +)."]}),
+                              errors={"phone": ["Enter a valid 10-digit phone number."]}),
                   err_example("Self Invite", "You cannot invite yourself.", "CANNOT_INVITE_SELF"),
                   err_example("Limit Reached", "Too many pending invites. Cancel some first.",
                               "INVITE_LIMIT_REACHED")),
