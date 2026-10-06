@@ -22,6 +22,7 @@ from .SwaggerDocs import (
   warehouse_list_create_docs,
   warehouse_detail_docs,
 )
+import uuid
 
 class InventoryPagination(StandardPagination):
     message = "Product list fetched."
@@ -32,6 +33,15 @@ class ProductListCreateApi(APIView):
   permission_classes = [IsAuthenticated, HasBusiness]
   throttle_classes = [InventoryThrottle]
   parser_classes = [MultiPartParser, FormParser]
+
+  def validate_uuid(self, value, field_name):
+    try:
+      return uuid.UUID(value)
+    except ValueError:
+      raise ValidationError(
+        f"Invalid {field_name} UUID."
+      )
+    
   def get(self, request):
     products = (
     Product.objects.filter(business=request.user.business).select_related(
@@ -45,11 +55,14 @@ class ProductListCreateApi(APIView):
 
     category = request.query_params.get("category")
     if category:
+      category = self.validate_uuid(category, "category")
       products = products.filter(category_id=category)
 
     warehouse = request.query_params.get("warehouse")
     if warehouse:
+      warehouse = self.validate_uuid(warehouse, "warehouse")
       products = products.filter(warehouse_id=warehouse)
+      
     ordering = request.query_params.get("ordering")
     if ordering:
       allowed_fields = {
