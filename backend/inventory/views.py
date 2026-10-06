@@ -9,15 +9,25 @@ from .serializers import ProductSerializer, StockAdjustmentSerializer, CategoryS
 from .throttles import InventoryThrottle
 from django.db import transaction
 from rest_framework.exceptions import ValidationError
-from rest_framework.pagination import PageNumberPagination
+
 from rest_framework.parsers import MultiPartParser, FormParser
+from accounts.pagination import StandardPagination
 
-class InventoryPagination(PageNumberPagination):
-    page_size = 10
-    page_size_query_param = "page_size"
-    max_page_size = 50
+from .SwaggerDocs import (
+  product_list_create_docs,
+  product_detail_docs,
+  product_adjust_stock_docs,
+  category_list_create_docs,
+  category_detail_docs,
+  warehouse_list_create_docs,
+  warehouse_detail_docs,
+)
+
+class InventoryPagination(StandardPagination):
+    message = "Product list fetched."
 
 
+@product_list_create_docs
 class ProductListCreateApi(APIView):
   permission_classes = [IsAuthenticated, HasBusiness]
   throttle_classes = [InventoryThrottle]
@@ -73,6 +83,7 @@ class ProductListCreateApi(APIView):
     )
 
 
+@product_detail_docs
 class ProductDetailApi(APIView):
   permission_classes = [IsAuthenticated, HasBusiness]
   throttle_classes = [InventoryThrottle]
@@ -135,6 +146,7 @@ class ProductDetailApi(APIView):
     )
 
 
+@product_adjust_stock_docs
 class ProductAdjustStockApi(APIView):
   permission_classes = [IsAuthenticated, HasBusiness]
   throttle_classes = [InventoryThrottle]
@@ -179,6 +191,7 @@ class ProductAdjustStockApi(APIView):
     )
 
 
+@category_list_create_docs
 class CategoryListCreateApi(APIView):
   permission_classes = [IsAuthenticated, HasBusiness]
   throttle_classes = [InventoryThrottle]
@@ -215,6 +228,7 @@ class CategoryListCreateApi(APIView):
     )
 
 
+@category_detail_docs
 class CategoryDetailApi(APIView):
   permission_classes = [IsAuthenticated, HasBusiness]
   throttle_classes = [InventoryThrottle]
@@ -290,6 +304,7 @@ class CategoryDetailApi(APIView):
     )
 
 
+@warehouse_list_create_docs
 class WarehouseListCreateApi(APIView):
   permission_classes = [IsAuthenticated, HasBusiness]
   throttle_classes = [InventoryThrottle]
@@ -326,6 +341,7 @@ class WarehouseListCreateApi(APIView):
     )
 
 
+@warehouse_detail_docs
 class WarehouseDetailApi(APIView):
   permission_classes = [IsAuthenticated, HasBusiness]
   throttle_classes = [InventoryThrottle]
