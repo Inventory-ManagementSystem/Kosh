@@ -1,5 +1,5 @@
 
-from django.db.models import Q
+from django.db.models import Q, ProtectedError
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
@@ -232,6 +232,11 @@ class CustomerListCreateApi(APIView):
         value={"is_active": False},
         request_only=True,
       ),
+      OpenApiExample(
+        "Reactivate Customer",
+        value={"is_active": True},
+        request_only=True,
+      ),
     ],
     responses={
       200: resp("Customer updated.",
@@ -249,13 +254,21 @@ class CustomerListCreateApi(APIView):
   ),
   delete=extend_schema(
     summary="Delete Customer",
-    description="Permanently deletes the customer.",
+    description=(
+      "Owner only: employees get a 403. Permanently deletes the customer. A customer "
+      "who has invoices cannot be deleted (409); set `is_active` to false with a "
+      "PATCH instead."
+    ),
     responses={
       200: resp("Customer deleted.",
                 ok_example("Deleted", "Customer deleted.")),
       401: UNAUTHORIZED_RESPONSE,
       403: FORBIDDEN_RESPONSE,
       404: NOT_FOUND_RESPONSE,
+      409: resp("Customer has invoices.",
+                err_example("Has Invoices",
+                            "This customer has invoices and cannot be deleted. Deactivate them instead.",
+                            "CUSTOMER_HAS_INVOICES")),
       429: resp("Too many write requests.", THROTTLED_EXAMPLE),
     },
   ),
@@ -312,5 +325,12 @@ class CustomerDetailApi(APIView):
         status=status.HTTP_403_FORBIDDEN,
       )
     customer = self.get_customer(request, pk)
-    customer.delete()
+    try:
+      customer.delete()
+    except ProtectedError:
+      return error_response(
+        "This customer has invoices and cannot be deleted. Deactivate them instead.",
+        "CUSTOMER_HAS_INVOICES",
+        status=status.HTTP_409_CONFLICT,
+      )
     return success_response("Customer deleted.")
