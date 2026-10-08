@@ -43,9 +43,7 @@ class ProductSerializer(serializers.ModelSerializer):
         allow_null=True,
     )
     warehouse = serializers.PrimaryKeyRelatedField(
-        queryset=Warehouse.objects.none(),
-        required=False,
-        allow_null=True,
+        read_only=True,
     )
     category_name = serializers.CharField(
         source="category.name",
@@ -96,11 +94,6 @@ class ProductSerializer(serializers.ModelSerializer):
         if business:
             self.fields["category"].queryset = (
                 Category.objects.filter(
-                    business=business
-                )
-            )
-            self.fields["warehouse"].queryset = (
-                Warehouse.objects.filter(
                     business=business
                 )
             )
@@ -191,6 +184,7 @@ class WarehouseSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "name",
+            "address",
             "created_at",
             "updated_at",
         ]
@@ -201,13 +195,4 @@ class WarehouseSerializer(serializers.ModelSerializer):
         ]
 
     def validate_name(self, value):
-        value = clean_name(value)
-        business = get_business(self.context)
-        check_name_is_unique(
-            Warehouse,
-            business,
-            value,
-            self.instance,
-            "Warehouse",
-        )
-        return value
+        return clean_name(value)

@@ -57,6 +57,7 @@ CATEGORY_EXAMPLE = {
 WAREHOUSE_EXAMPLE = {
   "id": WAREHOUSE_ID,
   "name": "Main Godown",
+  "address": "Plot 12, Industrial Area, Ghaziabad 201001",
   "created_at": "2026-10-05T10:00:00Z",
   "updated_at": "2026-10-05T10:00:00Z",
 }
@@ -111,8 +112,9 @@ def validation_cases(*cases):
 PRODUCT_BODY_NOTE = (
   "Accepts both `application/json` and `multipart/form-data`. Use JSON for normal "
   "product data, and use `multipart/form-data` when uploading or replacing the "
-  "`image` file. `category` and `warehouse` must be ids from this business; send "
-  "the field empty to clear it."
+  "`image` file. `category` must be an id from this business; send it empty to "
+  "clear it. `warehouse` is read-only: the server always puts products in the "
+  "business's one warehouse."
 )
 
 QUANTITY_NOTE = (
@@ -131,10 +133,6 @@ PRODUCT_LIST_PARAMS = [
   OpenApiParameter(
     "category", OpenApiTypes.UUID, OpenApiParameter.QUERY,
     description="Only products in this category id.",
-  ),
-  OpenApiParameter(
-    "warehouse", OpenApiTypes.UUID, OpenApiParameter.QUERY,
-    description="Only products stored in this warehouse id.",
   ),
   OpenApiParameter(
     "ordering", OpenApiTypes.STR, OpenApiParameter.QUERY,
@@ -176,13 +174,13 @@ PRODUCT_WRITE_EXAMPLE = {
   "cost_price": "16.50",
   "low_stock_threshold": 10,
   "category": CATEGORY_ID,
-  "warehouse": WAREHOUSE_ID,
 }
 
 QUANTITY_NOT_ALLOWED = ("Quantity Not Allowed", {"quantity": [QUANTITY_ERROR]})
 
 product_list_create_docs = extend_schema_view(
   get=extend_schema(
+    operation_id="inventory_products_list",
     summary="List Products",
     description=(
       "Returns a page of the logged-in user's business products, with optional "
@@ -349,6 +347,7 @@ product_adjust_stock_docs = extend_schema_view(
 def name_only_crud_docs(label, plural, serializer, example, delete_note):
   list_create = extend_schema_view(
     get=extend_schema(
+      operation_id=f"inventory_{plural.lower()}_list",
       summary=f"List {plural}",
       description=f"Returns all {plural.lower()} of the logged-in user's business. Not paginated.",
       responses={
@@ -453,7 +452,60 @@ category_list_create_docs, category_detail_docs = name_only_crud_docs(
   "Products in this category are kept and become uncategorised.",
 )
 
-warehouse_list_create_docs, warehouse_detail_docs = name_only_crud_docs(
-  "Warehouse", "Warehouses", WarehouseSerializer, WAREHOUSE_EXAMPLE,
-  "Products stored here are kept and are left without a warehouse.",
+warehouse_docs = extend_schema_view(
+  get=extend_schema(
+    summary="Get Warehouse",
+    description=(
+      "Returns the business's warehouse. Every business has exactly one "
+      "centralized warehouse, created automatically, and all products are stored "
+      "in it. There is no create or delete: POST and DELETE return 405."
+    ),
+    responses={
+      200: resp("Warehouse details.",
+                ok_example("Warehouse", "Warehouse fetched.", data=WAREHOUSE_EXAMPLE)),
+      401: UNAUTHORIZED_RESPONSE,
+      403: FORBIDDEN_RESPONSE,
+      429: THROTTLED_RESPONSE,
+    },
+  ),
+  put=extend_schema(
+    summary="Replace Warehouse Details",
+    description="Full update of the warehouse details. `name` is required. " + OWNER_NOTE,
+    request=WarehouseSerializer,
+    examples=[
+      OpenApiExample(
+        "Replace Warehouse",
+        value={"name": WAREHOUSE_EXAMPLE["name"], "address": WAREHOUSE_EXAMPLE["address"]},
+        request_only=True,
+      ),
+    ],
+    responses={
+      200: resp("Warehouse updated.",
+                ok_example("Updated", "Warehouse updated.", data=WAREHOUSE_EXAMPLE)),
+      400: validation_cases(
+        ("Missing Name", {"name": ["This field is required."]}),
+      ),
+      401: UNAUTHORIZED_RESPONSE,
+      403: OWNER_ONLY_RESPONSE,
+      429: THROTTLED_RESPONSE,
+    },
+  ),
+  patch=extend_schema(
+    summary="Update Warehouse Details",
+    description="Partial update. Send only the fields you want to change. " + OWNER_NOTE,
+    request=WarehouseSerializer,
+    examples=[
+      OpenApiExample("Rename Warehouse", value={"name": "Central Godown"}, request_only=True),
+    ],
+    responses={
+      200: resp("Warehouse updated.",
+                ok_example("Updated", "Warehouse updated.", data=WAREHOUSE_EXAMPLE)),
+      400: validation_cases(
+        ("Blank Name", {"name": ["This field may not be blank."]}),
+      ),
+      401: UNAUTHORIZED_RESPONSE,
+      403: OWNER_ONLY_RESPONSE,
+      429: THROTTLED_RESPONSE,
+    },
+  ),
 )
