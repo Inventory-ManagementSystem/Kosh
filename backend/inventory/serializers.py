@@ -1,13 +1,11 @@
 from rest_framework import serializers
 from .models import Category, Product, Warehouse
 
+QUANTITY_ERROR = "Stock can't be set here. Use the adjust-stock endpoint."
 
 def get_business(context):
     request = context.get("request")
-    user = getattr(request, "user", None)
-    if user and user.is_authenticated and hasattr(user, "business"):
-        return user.business
-    return None
+    return getattr(request, "business", None)
 
 
 def clean_name(value):
@@ -85,6 +83,7 @@ class ProductSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = [
             "id",
+            "quantity",
             "status",
             "created_at",
             "updated_at",
@@ -131,12 +130,9 @@ class ProductSerializer(serializers.ModelSerializer):
         return value
 
     def validate(self, attrs):
-        if self.instance is not None and "quantity" in attrs:
+        if "quantity" in self.initial_data:
             raise serializers.ValidationError({
-                "quantity": (
-                    "Use the adjust-stock endpoint "
-                    "to change stock."
-                )
+                "quantity": QUANTITY_ERROR
             })
 
         return attrs
