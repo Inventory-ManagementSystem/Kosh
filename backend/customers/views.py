@@ -1,5 +1,5 @@
 
-from django.db.models import Q
+from django.db.models import Q, ProtectedError
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
@@ -12,6 +12,7 @@ from inventory.throttles import InventoryThrottle
 
 from .models import Customer
 from .serializers import CustomerSerializer
+from accounts.pagination import StandardPagination
 
 from drf_spectacular.utils import (
   extend_schema,
@@ -68,8 +69,9 @@ VALIDATION_RESPONSE = resp(
   get=extend_schema(
     summary="List Customers",
     description=(
-      "Returns all customers of the logged-in user's business. Works for both "
-      "owners and employees. Optionally filter with `search` and `is_active`."
+      "Returns a page of the logged-in user's business customers. Works for both "
+      "owners and employees. Optionally filter with `search` and `is_active`. "
+      "Results are paginated."
     ),
     parameters=[
       OpenApiParameter(
@@ -81,11 +83,24 @@ VALIDATION_RESPONSE = resp(
         enum=["true", "false"],
         description="Show only active or only inactive customers.",
       ),
+      OpenApiParameter(
+        "page", OpenApiTypes.INT, OpenApiParameter.QUERY,
+        description="Page number, starting at 1.",
+      ),
+      OpenApiParameter(
+        "page_size", OpenApiTypes.INT, OpenApiParameter.QUERY,
+        description="Customers per page. Default 10, maximum 50.",
+      ),
     ],
     responses={
-      200: resp("Customer list.",
-                ok_example("Customers", "Customer list fetched.",
-                           data=[CUSTOMER_EXAMPLE])),
+      200: resp("One page of customers.",
+                ok_example("Customer page", "Customer list fetched.",
+                           data={
+                             "count": 25,
+                             "next": "https://kosh.dev-sushant.me/customers/?page=2",
+                             "previous": None,
+                             "results": [CUSTOMER_EXAMPLE],
+                           })),
       401: UNAUTHORIZED_RESPONSE,
       403: FORBIDDEN_RESPONSE,
     },
@@ -148,8 +163,13 @@ class CustomerListCreateApi(APIView):
     if is_active in ("true", "false"):
       customers = customers.filter(is_active=(is_active == "true"))
 
-    serializer = CustomerSerializer(customers, many=True)
-    return success_response("Customer list fetched.", serializer.data)
+    customers = customers.order_by("name", "id")
+
+    paginator = StandardPagination()
+    paginator.message = "Customer list fetched."
+    page = paginator.paginate_queryset(customers, request, view=self)
+    serializer = CustomerSerializer(page, many=True)
+    return paginator.get_paginated_response(serializer.data)
 
   def post(self, request):
     serializer = CustomerSerializer(
@@ -212,6 +232,11 @@ class CustomerListCreateApi(APIView):
         value={"is_active": False},
         request_only=True,
       ),
+      OpenApiExample(
+        "Reactivate Customer",
+        value={"is_active": True},
+        request_only=True,
+      ),
     ],
     responses={
       200: resp("Customer updated.",
@@ -229,13 +254,21 @@ class CustomerListCreateApi(APIView):
   ),
   delete=extend_schema(
     summary="Delete Customer",
-    description="Permanently deletes the customer.",
+    description=(
+      "Owner only: employees get a 403. Permanently deletes the customer. A customer "
+      "who has invoices cannot be deleted (409); set `is_active` to false with a "
+      "PATCH instead."
+    ),
     responses={
       200: resp("Customer deleted.",
                 ok_example("Deleted", "Customer deleted.")),
       401: UNAUTHORIZED_RESPONSE,
       403: FORBIDDEN_RESPONSE,
       404: NOT_FOUND_RESPONSE,
+      409: resp("Customer has invoices.",
+                err_example("Has Invoices",
+                            "This customer has invoices and cannot be deleted. Deactivate them instead.",
+                            "CUSTOMER_HAS_INVOICES")),
       429: resp("Too many write requests.", THROTTLED_EXAMPLE),
     },
   ),
@@ -292,5 +325,12 @@ class CustomerDetailApi(APIView):
         status=status.HTTP_403_FORBIDDEN,
       )
     customer = self.get_customer(request, pk)
-    customer.delete()
+    try:
+      customer.delete()
+    except ProtectedError:
+      return error_response(
+        "This customer has invoices and cannot be deleted. Deactivate them instead.",
+        "CUSTOMER_HAS_INVOICES",
+        status=status.HTTP_409_CONFLICT,
+      )
     return success_response("Customer deleted.")

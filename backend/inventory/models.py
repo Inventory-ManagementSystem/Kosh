@@ -1,7 +1,8 @@
 from django.db import models
 import uuid
-from django.core.validators import MinValueValidator
+from django.core.validators import MinValueValidator, FileExtensionValidator
 from django.db.models.functions import Lower
+from django.core.exceptions import ValidationError
 
 # Create your models here.
 
@@ -36,27 +37,36 @@ class Category(models.Model):
 
 class Warehouse(models.Model):
   id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-  business = models.ForeignKey(
+  business = models.OneToOneField(
     "accounts.Business",
     on_delete=models.CASCADE,
-    related_name="warehouses"
+    related_name="warehouse"
   )
-  name = models.CharField(max_length=100)
+  name = models.CharField(max_length=100, default="Main Warehouse")
+  address = models.TextField(blank=True, default="")
   created_at = models.DateTimeField(auto_now_add=True)
   updated_at = models.DateTimeField(auto_now=True)
 
-  class Meta:
-    ordering = ["name"]
-    constraints = [
-      models.UniqueConstraint(
-        Lower("name"),
-        "business",
-        name="uniq_warehouse_name_per_business"
-      ),
-    ]
-
   def __str__(self):
     return self.name
+
+
+MAX_IMAGE_SIZE = 5 * 1024 * 1024
+ALLOWED_IMAGE_EXTENSIONS = ["jpg", "jpeg", "png", "webp"]
+
+def validate_image_size(image):
+  if image.size > MAX_IMAGE_SIZE:
+    raise ValidationError("Image size must not exceed 5 MB.")
+
+def validate_image_content(image):
+  try:
+    from PIL import Image
+    Image.open(image).verify()
+  except Exception:
+    raise ValidationError(
+      "Invalid image file. Please upload a valid image."
+    )
+
 
 class Product(models.Model):
 
@@ -89,6 +99,13 @@ class Product(models.Model):
     upload_to="products/",
     null=True,
     blank=True,
+    validators=[
+      validate_image_size,
+      validate_image_content,
+      FileExtensionValidator(
+        allowed_extensions=ALLOWED_IMAGE_EXTENSIONS
+      ),
+    ],
   )
   sku = models.CharField(max_length=64)
   description = models.TextField(blank=True)

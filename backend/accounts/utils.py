@@ -2,7 +2,7 @@ from datetime import timedelta
 from django.utils import timezone
 
 from .models import Business, Employee, EmployeeInvite
-
+from suppliers.models import SupplierProfile
 INVITE_TTL = timedelta(days=14)
 
 
@@ -11,6 +11,8 @@ def get_role(user):
         return "owner"
     if Employee.objects.filter(user=user, is_active=True).exists():
         return "employee"
+    if SupplierProfile.objects.filter(user=user).exists():
+        return "supplier"
     return None
 
 

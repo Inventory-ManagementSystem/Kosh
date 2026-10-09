@@ -15,6 +15,7 @@ from accounts.swagger import (
 )
 
 from .serializers import (
+  QUANTITY_ERROR,
   CategorySerializer,
   ProductSerializer,
   StockAdjustmentSerializer,
@@ -56,16 +57,29 @@ CATEGORY_EXAMPLE = {
 WAREHOUSE_EXAMPLE = {
   "id": WAREHOUSE_ID,
   "name": "Main Godown",
+  "address": "Plot 12, Industrial Area, Ghaziabad 201001",
   "created_at": "2026-10-05T10:00:00Z",
   "updated_at": "2026-10-05T10:00:00Z",
 }
 
 
+NO_BUSINESS_EXAMPLE = err_example(
+  "No Business",
+  "Register your business or join one before using this feature.",
+  "FORBIDDEN",
+)
+
 FORBIDDEN_RESPONSE = resp(
-  "User has no registered business.",
+  "The user neither owns nor works for a business.",
+  NO_BUSINESS_EXAMPLE,
+)
+
+OWNER_ONLY_RESPONSE = resp(
+  "The user has no business, or is an employee. Only the owner can make this change.",
+  NO_BUSINESS_EXAMPLE,
   err_example(
-    "No Business",
-    "You do not have permission to perform this action.",
+    "Not Owner",
+    "Only the business owner can perform this action.",
     "FORBIDDEN",
   ),
 )
@@ -95,17 +109,20 @@ def validation_cases(*cases):
     ],
   )
 
-MULTIPART_NOTE = (
-  "Send the body as `multipart/form-data` (form fields), not JSON; a JSON body is "
-  "rejected with 415 Unsupported Media Type. A picture can be uploaded in the `image` "
-  "file field. `category` and `warehouse` must be ids from this business; send the "
-  "field empty to clear it."
+PRODUCT_BODY_NOTE = (
+  "Accepts both `application/json` and `multipart/form-data`. Use JSON for normal "
+  "product data, and use `multipart/form-data` when uploading or replacing the "
+  "`image` file. `category` must be an id from this business; send it empty to "
+  "clear it. `warehouse` is read-only: the server always puts products in the "
+  "business's one warehouse."
 )
 
 QUANTITY_NOTE = (
-  "`quantity` can only be set when the product is created. On update it is rejected "
-  "with a 400, because stock changes must go through the adjust-stock endpoint."
+  "`quantity` is read-only: new products start at 0, and sending `quantity` on "
+  "create or update returns a 400. Change stock with the adjust-stock endpoint."
 )
+
+OWNER_NOTE = "Owner only; employees get a 403."
 
 
 PRODUCT_LIST_PARAMS = [
@@ -116,10 +133,6 @@ PRODUCT_LIST_PARAMS = [
   OpenApiParameter(
     "category", OpenApiTypes.UUID, OpenApiParameter.QUERY,
     description="Only products in this category id.",
-  ),
-  OpenApiParameter(
-    "warehouse", OpenApiTypes.UUID, OpenApiParameter.QUERY,
-    description="Only products stored in this warehouse id.",
   ),
   OpenApiParameter(
     "ordering", OpenApiTypes.STR, OpenApiParameter.QUERY,
@@ -159,16 +172,15 @@ PRODUCT_WRITE_EXAMPLE = {
   "description": "Glucose biscuits, 200 g pack",
   "price": "20.00",
   "cost_price": "16.50",
-  "quantity": 120,
   "low_stock_threshold": 10,
   "category": CATEGORY_ID,
-  "warehouse": WAREHOUSE_ID,
 }
 
-PRODUCT_UPDATE_EXAMPLE = {k: v for k, v in PRODUCT_WRITE_EXAMPLE.items() if k != "quantity"}
+QUANTITY_NOT_ALLOWED = ("Quantity Not Allowed", {"quantity": [QUANTITY_ERROR]})
 
 product_list_create_docs = extend_schema_view(
   get=extend_schema(
+    operation_id="inventory_products_list",
     summary="List Products",
     description=(
       "Returns a page of the logged-in user's business products, with optional "
@@ -187,8 +199,8 @@ product_list_create_docs = extend_schema_view(
     description=(
       "Creates a product in the logged-in user's business. The business is set by "
       "the server, never by the request body. The `sku` is trimmed, stored in upper "
-      "case and must be unique within the business. `quantity` sets the opening stock. "
-      + MULTIPART_NOTE
+      "case and must be unique within the business. "
+      + QUANTITY_NOTE + " " + OWNER_NOTE + " " + PRODUCT_BODY_NOTE
     ),
     request=ProductSerializer,
     examples=[
@@ -212,9 +224,10 @@ product_list_create_docs = extend_schema_view(
         ("Unknown Category", {
           "category": [f'Invalid pk "{CATEGORY_ID}" - object does not exist.'],
         }),
+        QUANTITY_NOT_ALLOWED,
       ),
       401: UNAUTHORIZED_RESPONSE,
-      403: FORBIDDEN_RESPONSE,
+      403: OWNER_ONLY_RESPONSE,
       429: THROTTLED_RESPONSE,
     },
   ),
@@ -236,11 +249,11 @@ product_detail_docs = extend_schema_view(
     summary="Replace Product",
     description=(
       "Full update. `name`, `sku` and `price` are required. "
-      + QUANTITY_NOTE + " " + MULTIPART_NOTE
+      + QUANTITY_NOTE + " " + OWNER_NOTE + " " + PRODUCT_BODY_NOTE
     ),
     request=ProductSerializer,
     examples=[
-      OpenApiExample("Replace Product", value=PRODUCT_UPDATE_EXAMPLE, request_only=True),
+      OpenApiExample("Replace Product", value=PRODUCT_WRITE_EXAMPLE, request_only=True),
     ],
     responses={
       200: resp("Product updated.",
@@ -248,12 +261,10 @@ product_detail_docs = extend_schema_view(
       400: validation_cases(
         ("Missing Fields", {"sku": ["This field is required."]}),
         ("Duplicate SKU", {"sku": ["SKU already exists in your inventory."]}),
-        ("Quantity Not Allowed", {
-          "quantity": ["Use the adjust-stock endpoint to change stock."],
-        }),
+        QUANTITY_NOT_ALLOWED,
       ),
       401: UNAUTHORIZED_RESPONSE,
-      403: FORBIDDEN_RESPONSE,
+      403: OWNER_ONLY_RESPONSE,
       404: not_found("Product"),
       429: THROTTLED_RESPONSE,
     },
@@ -262,7 +273,7 @@ product_detail_docs = extend_schema_view(
     summary="Update Product",
     description=(
       "Partial update. Send only the fields you want to change. "
-      + QUANTITY_NOTE + " " + MULTIPART_NOTE
+      + QUANTITY_NOTE + " " + OWNER_NOTE + " " + PRODUCT_BODY_NOTE
     ),
     request=ProductSerializer,
     examples=[
@@ -275,23 +286,24 @@ product_detail_docs = extend_schema_view(
       400: validation_cases(
         ("Invalid Price", {"price": ["A valid number is required."]}),
         ("Duplicate SKU", {"sku": ["SKU already exists in your inventory."]}),
-        ("Quantity Not Allowed", {
-          "quantity": ["Use the adjust-stock endpoint to change stock."],
-        }),
+        QUANTITY_NOT_ALLOWED,
       ),
       401: UNAUTHORIZED_RESPONSE,
-      403: FORBIDDEN_RESPONSE,
+      403: OWNER_ONLY_RESPONSE,
       404: not_found("Product"),
       429: THROTTLED_RESPONSE,
     },
   ),
   delete=extend_schema(
     summary="Delete Product",
-    description="Permanently deletes the product. To keep it but hide it, set `is_active` to false instead.",
+    description=(
+      "Permanently deletes the product. To keep it but hide it, set `is_active` "
+      "to false instead. " + OWNER_NOTE
+    ),
     responses={
       200: resp("Product deleted.", ok_example("Deleted", "Product deleted.")),
       401: UNAUTHORIZED_RESPONSE,
-      403: FORBIDDEN_RESPONSE,
+      403: OWNER_ONLY_RESPONSE,
       404: not_found("Product"),
       429: THROTTLED_RESPONSE,
     },
@@ -307,7 +319,8 @@ product_adjust_stock_docs = extend_schema_view(
       "removes it. The product row is locked while the change is applied, so "
       "simultaneous adjustments can't clash. If the result would be below zero, nothing "
       "changes and a 400 is returned. `reason` is an optional note (up to 255 "
-      "characters); it is accepted but currently not saved. Accepts JSON."
+      "characters); it is accepted but currently not saved. Both the owner and "
+      "employees can adjust stock. Accepts JSON."
     ),
     request=StockAdjustmentSerializer,
     examples=[
@@ -334,6 +347,7 @@ product_adjust_stock_docs = extend_schema_view(
 def name_only_crud_docs(label, plural, serializer, example, delete_note):
   list_create = extend_schema_view(
     get=extend_schema(
+      operation_id=f"inventory_{plural.lower()}_list",
       summary=f"List {plural}",
       description=f"Returns all {plural.lower()} of the logged-in user's business. Not paginated.",
       responses={
@@ -349,7 +363,7 @@ def name_only_crud_docs(label, plural, serializer, example, delete_note):
       description=(
         f"Creates a {label.lower()} in the logged-in user's business. The name must be "
         "unique within the business, ignoring upper and lower case. "
-        "The business is set by the server."
+        "The business is set by the server. " + OWNER_NOTE
       ),
       request=serializer,
       examples=[
@@ -363,7 +377,7 @@ def name_only_crud_docs(label, plural, serializer, example, delete_note):
           ("Duplicate Name", {"name": [f"{label} with this name already exists."]}),
         ),
         401: UNAUTHORIZED_RESPONSE,
-        403: FORBIDDEN_RESPONSE,
+        403: OWNER_ONLY_RESPONSE,
         429: THROTTLED_RESPONSE,
       },
     ),
@@ -383,7 +397,7 @@ def name_only_crud_docs(label, plural, serializer, example, delete_note):
     ),
     put=extend_schema(
       summary=f"Replace {label}",
-      description="Full update. `name` is required.",
+      description="Full update. `name` is required. " + OWNER_NOTE,
       request=serializer,
       responses={
         200: resp(f"{label} updated.",
@@ -393,14 +407,14 @@ def name_only_crud_docs(label, plural, serializer, example, delete_note):
           ("Duplicate Name", {"name": [f"{label} with this name already exists."]}),
         ),
         401: UNAUTHORIZED_RESPONSE,
-        403: FORBIDDEN_RESPONSE,
+        403: OWNER_ONLY_RESPONSE,
         404: not_found(label),
         429: THROTTLED_RESPONSE,
       },
     ),
     patch=extend_schema(
       summary=f"Update {label}",
-      description="Partial update. Send only the fields you want to change.",
+      description="Partial update. Send only the fields you want to change. " + OWNER_NOTE,
       request=serializer,
       examples=[
         OpenApiExample(f"Rename {label}", value={"name": "New Name"}, request_only=True),
@@ -413,18 +427,18 @@ def name_only_crud_docs(label, plural, serializer, example, delete_note):
           ("Duplicate Name", {"name": [f"{label} with this name already exists."]}),
         ),
         401: UNAUTHORIZED_RESPONSE,
-        403: FORBIDDEN_RESPONSE,
+        403: OWNER_ONLY_RESPONSE,
         404: not_found(label),
         429: THROTTLED_RESPONSE,
       },
     ),
     delete=extend_schema(
       summary=f"Delete {label}",
-      description=f"Permanently deletes the {label.lower()}. {delete_note}",
+      description=f"Permanently deletes the {label.lower()}. {delete_note} {OWNER_NOTE}",
       responses={
         200: resp(f"{label} deleted.", ok_example("Deleted", f"{label} deleted.")),
         401: UNAUTHORIZED_RESPONSE,
-        403: FORBIDDEN_RESPONSE,
+        403: OWNER_ONLY_RESPONSE,
         404: not_found(label),
         429: THROTTLED_RESPONSE,
       },
@@ -438,7 +452,60 @@ category_list_create_docs, category_detail_docs = name_only_crud_docs(
   "Products in this category are kept and become uncategorised.",
 )
 
-warehouse_list_create_docs, warehouse_detail_docs = name_only_crud_docs(
-  "Warehouse", "Warehouses", WarehouseSerializer, WAREHOUSE_EXAMPLE,
-  "Products stored here are kept and are left without a warehouse.",
+warehouse_docs = extend_schema_view(
+  get=extend_schema(
+    summary="Get Warehouse",
+    description=(
+      "Returns the business's warehouse. Every business has exactly one "
+      "centralized warehouse, created automatically, and all products are stored "
+      "in it. There is no create or delete: POST and DELETE return 405."
+    ),
+    responses={
+      200: resp("Warehouse details.",
+                ok_example("Warehouse", "Warehouse fetched.", data=WAREHOUSE_EXAMPLE)),
+      401: UNAUTHORIZED_RESPONSE,
+      403: FORBIDDEN_RESPONSE,
+      429: THROTTLED_RESPONSE,
+    },
+  ),
+  put=extend_schema(
+    summary="Replace Warehouse Details",
+    description="Full update of the warehouse details. `name` is required. " + OWNER_NOTE,
+    request=WarehouseSerializer,
+    examples=[
+      OpenApiExample(
+        "Replace Warehouse",
+        value={"name": WAREHOUSE_EXAMPLE["name"], "address": WAREHOUSE_EXAMPLE["address"]},
+        request_only=True,
+      ),
+    ],
+    responses={
+      200: resp("Warehouse updated.",
+                ok_example("Updated", "Warehouse updated.", data=WAREHOUSE_EXAMPLE)),
+      400: validation_cases(
+        ("Missing Name", {"name": ["This field is required."]}),
+      ),
+      401: UNAUTHORIZED_RESPONSE,
+      403: OWNER_ONLY_RESPONSE,
+      429: THROTTLED_RESPONSE,
+    },
+  ),
+  patch=extend_schema(
+    summary="Update Warehouse Details",
+    description="Partial update. Send only the fields you want to change. " + OWNER_NOTE,
+    request=WarehouseSerializer,
+    examples=[
+      OpenApiExample("Rename Warehouse", value={"name": "Central Godown"}, request_only=True),
+    ],
+    responses={
+      200: resp("Warehouse updated.",
+                ok_example("Updated", "Warehouse updated.", data=WAREHOUSE_EXAMPLE)),
+      400: validation_cases(
+        ("Blank Name", {"name": ["This field may not be blank."]}),
+      ),
+      401: UNAUTHORIZED_RESPONSE,
+      403: OWNER_ONLY_RESPONSE,
+      429: THROTTLED_RESPONSE,
+    },
+  ),
 )

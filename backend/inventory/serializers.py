@@ -1,13 +1,11 @@
 from rest_framework import serializers
 from .models import Category, Product, Warehouse
 
+QUANTITY_ERROR = "Stock can't be set here. Use the adjust-stock endpoint."
 
 def get_business(context):
     request = context.get("request")
-    user = getattr(request, "user", None)
-    if user and user.is_authenticated and hasattr(user, "business"):
-        return user.business
-    return None
+    return getattr(request, "business", None)
 
 
 def clean_name(value):
@@ -45,9 +43,7 @@ class ProductSerializer(serializers.ModelSerializer):
         allow_null=True,
     )
     warehouse = serializers.PrimaryKeyRelatedField(
-        queryset=Warehouse.objects.none(),
-        required=False,
-        allow_null=True,
+        read_only=True,
     )
     category_name = serializers.CharField(
         source="category.name",
@@ -85,6 +81,7 @@ class ProductSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = [
             "id",
+            "quantity",
             "status",
             "created_at",
             "updated_at",
@@ -97,11 +94,6 @@ class ProductSerializer(serializers.ModelSerializer):
         if business:
             self.fields["category"].queryset = (
                 Category.objects.filter(
-                    business=business
-                )
-            )
-            self.fields["warehouse"].queryset = (
-                Warehouse.objects.filter(
                     business=business
                 )
             )
@@ -131,12 +123,9 @@ class ProductSerializer(serializers.ModelSerializer):
         return value
 
     def validate(self, attrs):
-        if self.instance is not None and "quantity" in attrs:
+        if "quantity" in self.initial_data:
             raise serializers.ValidationError({
-                "quantity": (
-                    "Use the adjust-stock endpoint "
-                    "to change stock."
-                )
+                "quantity": QUANTITY_ERROR
             })
 
         return attrs
@@ -195,6 +184,7 @@ class WarehouseSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "name",
+            "address",
             "created_at",
             "updated_at",
         ]
@@ -205,13 +195,4 @@ class WarehouseSerializer(serializers.ModelSerializer):
         ]
 
     def validate_name(self, value):
-        value = clean_name(value)
-        business = get_business(self.context)
-        check_name_is_unique(
-            Warehouse,
-            business,
-            value,
-            self.instance,
-            "Warehouse",
-        )
-        return value
+        return clean_name(value)

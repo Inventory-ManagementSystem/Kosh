@@ -63,6 +63,7 @@ INSTALLED_APPS = [
     'drf_spectacular',
     'accounts.apps.AccountsConfig',
     'inventory',
+    'suppliers',
     'rest_framework_simplejwt.token_blacklist',
     'django.contrib.sites',
     'allauth',
@@ -72,7 +73,8 @@ INSTALLED_APPS = [
     'allauth.socialaccount.providers.github',
     'storages',
     'corsheaders',
-    'customers'
+    'customers',
+    'django_cleanup.apps.CleanupConfig',
 ]
 
 JAZZMIN_SETTINGS = {
@@ -88,6 +90,7 @@ STORAGES = {
         "BACKEND": "config.storage.SafeManifestStaticFilesStorage",
     },
 }
+DATA_UPLOAD_MAX_MEMORY_SIZE = 6 * 1024 * 1024
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
     'django.middleware.security.SecurityMiddleware',

@@ -1,16 +1,17 @@
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
-from .permissions import HasBusiness
+from accounts.permissions import HasBusinessAccess, IsOwnerOrReadOnly
 from rest_framework.views import APIView
 from accounts.responses import success_response
-from .models import Product, Category, Warehouse
+from .models import Product, Category
 from .serializers import ProductSerializer, StockAdjustmentSerializer, CategorySerializer, WarehouseSerializer
+from .services import get_warehouse
 from .throttles import InventoryThrottle
 from django.db import transaction
 from rest_framework.exceptions import ValidationError
 
-from rest_framework.parsers import MultiPartParser, FormParser
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from accounts.pagination import StandardPagination
 
 from .SwaggerDocs import (
@@ -19,9 +20,9 @@ from .SwaggerDocs import (
   product_adjust_stock_docs,
   category_list_create_docs,
   category_detail_docs,
-  warehouse_list_create_docs,
-  warehouse_detail_docs,
+  warehouse_docs,
 )
+import uuid
 
 class InventoryPagination(StandardPagination):
     message = "Product list fetched."
@@ -29,12 +30,21 @@ class InventoryPagination(StandardPagination):
 
 @product_list_create_docs
 class ProductListCreateApi(APIView):
-  permission_classes = [IsAuthenticated, HasBusiness]
+  permission_classes = [IsAuthenticated, HasBusinessAccess, IsOwnerOrReadOnly]
   throttle_classes = [InventoryThrottle]
-  parser_classes = [MultiPartParser, FormParser]
+  parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+  def validate_uuid(self, value, field_name):
+    try:
+      return uuid.UUID(value)
+    except ValueError:
+      raise ValidationError(
+        f"Invalid {field_name} UUID."
+      )
+    
   def get(self, request):
     products = (
-    Product.objects.filter(business=request.user.business).select_related(
+    Product.objects.filter(business=request.business).select_related(
       "category",
       "warehouse",
       )
@@ -45,11 +55,9 @@ class ProductListCreateApi(APIView):
 
     category = request.query_params.get("category")
     if category:
+      category = self.validate_uuid(category, "category")
       products = products.filter(category_id=category)
 
-    warehouse = request.query_params.get("warehouse")
-    if warehouse:
-      products = products.filter(warehouse_id=warehouse)
     ordering = request.query_params.get("ordering")
     if ordering:
       allowed_fields = {
@@ -74,7 +82,8 @@ class ProductListCreateApi(APIView):
     )
     serializer.is_valid(raise_exception=True)
     serializer.save(
-      business=request.user.business
+      business=request.business,
+      warehouse=get_warehouse(request.business),
     )
     return success_response(
       "Product created.",
@@ -85,9 +94,9 @@ class ProductListCreateApi(APIView):
 
 @product_detail_docs
 class ProductDetailApi(APIView):
-  permission_classes = [IsAuthenticated, HasBusiness]
+  permission_classes = [IsAuthenticated, HasBusinessAccess, IsOwnerOrReadOnly]
   throttle_classes = [InventoryThrottle]
-  parser_classes = [MultiPartParser, FormParser]
+  parser_classes = [MultiPartParser, FormParser, JSONParser]
   def get_product(self, request, pk):
     return get_object_or_404(
       Product.objects.select_related(
@@ -95,7 +104,7 @@ class ProductDetailApi(APIView):
         "warehouse",
       ),
       pk=pk,
-      business=request.user.business,
+      business=request.business,
     )
 
   def get(self, request, pk):
@@ -148,7 +157,7 @@ class ProductDetailApi(APIView):
 
 @product_adjust_stock_docs
 class ProductAdjustStockApi(APIView):
-  permission_classes = [IsAuthenticated, HasBusiness]
+  permission_classes = [IsAuthenticated,HasBusinessAccess,]
   throttle_classes = [InventoryThrottle]
   def post(self, request, pk):
     input_serializer = StockAdjustmentSerializer(
@@ -165,7 +174,7 @@ class ProductAdjustStockApi(APIView):
       product = get_object_or_404(
         Product.objects.select_for_update(),
         pk=pk,
-        business=request.user.business,
+        business=request.business,
       )
       new_quantity = (product.quantity + change)
       if new_quantity < 0:
@@ -193,12 +202,12 @@ class ProductAdjustStockApi(APIView):
 
 @category_list_create_docs
 class CategoryListCreateApi(APIView):
-  permission_classes = [IsAuthenticated, HasBusiness]
+  permission_classes = [IsAuthenticated, HasBusinessAccess, IsOwnerOrReadOnly]
   throttle_classes = [InventoryThrottle]
 
   def get(self, request):
     categories = Category.objects.filter(
-      business=request.user.business
+      business=request.business
     )
     serializer = CategorySerializer(
       categories,
@@ -219,7 +228,7 @@ class CategoryListCreateApi(APIView):
       raise_exception=True
     )
     serializer.save(
-      business=request.user.business
+      business=request.business
     )
     return success_response(
       "Category created.",
@@ -230,14 +239,14 @@ class CategoryListCreateApi(APIView):
 
 @category_detail_docs
 class CategoryDetailApi(APIView):
-  permission_classes = [IsAuthenticated, HasBusiness]
+  permission_classes = [IsAuthenticated, HasBusinessAccess, IsOwnerOrReadOnly]
   throttle_classes = [InventoryThrottle]
 
   def get_category(self, request, pk):
     category = get_object_or_404(
       Category,
       pk=pk,
-      business=request.user.business,
+      business=request.business,
     )
     self.check_object_permissions(
       request,
@@ -304,65 +313,13 @@ class CategoryDetailApi(APIView):
     )
 
 
-@warehouse_list_create_docs
-class WarehouseListCreateApi(APIView):
-  permission_classes = [IsAuthenticated, HasBusiness]
+@warehouse_docs
+class WarehouseApi(APIView):
+  permission_classes = [IsAuthenticated, HasBusinessAccess, IsOwnerOrReadOnly]
   throttle_classes = [InventoryThrottle]
 
   def get(self, request):
-    warehouses = Warehouse.objects.filter(
-      business=request.user.business
-    )
-    serializer = WarehouseSerializer(
-      warehouses,
-      many=True,
-      context={"request": request},
-    )
-    return success_response(
-      "Warehouse list fetched.",
-      serializer.data,
-    )
-
-  def post(self, request):
-    serializer = WarehouseSerializer(
-      data=request.data,
-      context={"request": request},
-    )
-    serializer.is_valid(
-      raise_exception=True
-    )
-    serializer.save(
-      business=request.user.business
-    )
-    return success_response(
-      "Warehouse created.",
-      serializer.data,
-      status=201,
-    )
-
-
-@warehouse_detail_docs
-class WarehouseDetailApi(APIView):
-  permission_classes = [IsAuthenticated, HasBusiness]
-  throttle_classes = [InventoryThrottle]
-
-  def get_warehouse(self, request, pk):
-    warehouse = get_object_or_404(
-      Warehouse,
-      pk=pk,
-      business=request.user.business,
-    )
-    self.check_object_permissions(
-      request,
-      warehouse,
-    )
-    return warehouse
-
-  def get(self, request, pk):
-    warehouse = self.get_warehouse(
-      request,
-      pk,
-    )
+    warehouse = get_warehouse(request.business)
     serializer = WarehouseSerializer(
       warehouse,
       context={"request": request},
@@ -372,24 +329,20 @@ class WarehouseDetailApi(APIView):
       serializer.data,
     )
 
-  def put(self, request, pk):
+  def put(self, request):
     return self.update(
       request,
-      pk,
       partial=False,
     )
-  def patch(self, request, pk):
+
+  def patch(self, request):
     return self.update(
       request,
-      pk,
       partial=True,
     )
 
-  def update(self, request, pk, partial):
-    warehouse = self.get_warehouse(
-      request,
-      pk,
-    )
+  def update(self, request, partial):
+    warehouse = get_warehouse(request.business)
     serializer = WarehouseSerializer(
       warehouse,
       data=request.data,
@@ -403,14 +356,4 @@ class WarehouseDetailApi(APIView):
     return success_response(
       "Warehouse updated.",
       serializer.data,
-    )
-
-  def delete(self, request, pk):
-    warehouse = self.get_warehouse(
-      request,
-      pk,
-    )
-    warehouse.delete()
-    return success_response(
-      "Warehouse deleted."
     )
