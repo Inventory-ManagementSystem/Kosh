@@ -63,6 +63,7 @@ INSTALLED_APPS = [
     'drf_spectacular',
     'accounts.apps.AccountsConfig',
     'inventory',
+    'suppliers',
     'rest_framework_simplejwt.token_blacklist',
     'django.contrib.sites',
     'allauth',
@@ -219,7 +220,7 @@ SPECTACULAR_SETTINGS = {
     "SERVE_INCLUDE_SCHEMA": False,
 }
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=10),
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=50),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=1),
     'AUTH_HEADER_TYPES': ('Bearer',),
     'ROTATE_REFRESH_TOKENS': True,

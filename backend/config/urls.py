@@ -35,6 +35,7 @@ urlpatterns = [
         RedirectView.as_view(url="https://koshh.me/login")),
     path('accounts/',include('allauth.urls')),
     path('inventory/', include('inventory.urls')),
+    path('suppliers/', include('suppliers.urls')),
     path('customers/', include('customers.urls')),
     path('', HealthAPIView.as_view(), name='health'),
     path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
