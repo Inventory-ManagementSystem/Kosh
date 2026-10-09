@@ -3,6 +3,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from .models import Business, Profile, Employee, EmployeeInvite
+from suppliers.models import SupplierProfile
 from .utils import get_role, get_owned_business, invite_cutoff, purge_expired_invites, INVITE_TTL
 from .serializers import (
   RegisterSerializer,
@@ -1030,6 +1031,11 @@ class BusinessRegistration(APIView):
             "Business is already registered.", "BUSINESS_EXISTS",
             status=status.HTTP_409_CONFLICT,
         )
+    if SupplierProfile.objects.filter(user=request.user).exists():
+        return error_response(
+            "Suppliers cannot register a business.", "SUPPLIER_CANNOT_REGISTER_BUSINESS",
+            status=status.HTTP_409_CONFLICT,
+        )
     serializer = BusinessRegistrationSerializer(data=request.data)
     if not serializer.is_valid():
         return error_response(
@@ -1448,6 +1454,11 @@ class AcceptInviteApi(APIView):
                         status=status.HTTP_409_CONFLICT,
                     )
 
+                if SupplierProfile.objects.filter(user=user).exists():
+                    return error_response(
+                        "Suppliers cannot join a business as an employee.", "ALREADY_SUPPLIER",
+                        status=status.HTTP_409_CONFLICT,
+                    )
                 business = invite.business
                 Employee.objects.create(user=user, business=business, phone=invite.phone)
                 EmployeeInvite.objects.filter(email__iexact=user.email).delete()

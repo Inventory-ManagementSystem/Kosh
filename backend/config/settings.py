@@ -63,6 +63,7 @@ INSTALLED_APPS = [
     'drf_spectacular',
     'accounts.apps.AccountsConfig',
     'inventory',
+    'suppliers',
     'rest_framework_simplejwt.token_blacklist',
     'django.contrib.sites',
     'allauth',
