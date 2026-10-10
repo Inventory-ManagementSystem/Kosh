@@ -137,6 +137,10 @@ class Product(models.Model):
   )
   low_stock_threshold = models.PositiveIntegerField(default=10)
 
+  lead_time_days = models.PositiveIntegerField(default=7)
+  safety_stock = models.PositiveIntegerField(default=0)
+  reorder_quantity = models.PositiveIntegerField(default=0)
+
   @property
   def status(self):
     if self.quantity == 0:

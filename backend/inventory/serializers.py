@@ -86,6 +86,9 @@ class ProductSerializer(serializers.ModelSerializer):
             "quantity",
             "opening_quantity",
             "low_stock_threshold",
+            "lead_time_days",
+            "safety_stock",
+            "reorder_quantity"
             "status",
             "is_active",
             "created_at",
@@ -98,6 +101,12 @@ class ProductSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+
+        extra_kwargs = {
+            "lead_time_days": {"min_value": 1, "max_value": 365},
+            "safety_stock": {"max_value": 1_000_000},
+            "reorder_quantity": {"max_value": 1_000_000},
+        }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

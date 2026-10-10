@@ -43,6 +43,9 @@ PRODUCT_EXAMPLE = {
   "cost_price": "16.50",
   "quantity": 120,
   "low_stock_threshold": 10,
+  "lead_time_days": 7,
+  "safety_stock": 5,
+  "reorder_quantity": 0, 
   "status": "In Stock",
   "is_active": True,
   "created_at": "2026-10-05T10:00:00Z",
@@ -176,6 +179,9 @@ PRODUCT_WRITE_EXAMPLE = {
   "cost_price": "16.50",
   "opening_quantity": 50,
   "low_stock_threshold": 10,
+  "lead_time_days": 7,
+  "safety_stock": 5,
+  "reorder_quantity": 0,
   "category": CATEGORY_ID,
 }
 
