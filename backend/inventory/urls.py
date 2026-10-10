@@ -12,4 +12,11 @@ urlpatterns = [
   path("categories/<uuid:pk>/",views.CategoryDetailApi.as_view(),name="category-detail",),
 
   path("warehouse/",views.WarehouseApi.as_view(),name="warehouse",),
+
+  path("outlets/",views.OutletListCreateApi.as_view(),name="outlet-list",),
+  path("outlets/<uuid:pk>/",views.OutletDetailApi.as_view(),name="outlet-detail",),
+
+  path("dispatches/",views.DispatchListCreateApi.as_view(),name="dispatch-list",),
+  path("dispatches/<uuid:pk>/",views.DispatchDetailApi.as_view(),name="dispatch-detail",),
+
 ]

@@ -20,6 +20,9 @@ from .serializers import (
   ProductSerializer,
   StockAdjustmentSerializer,
   WarehouseSerializer,
+  DispatchCreateSerializer,
+  DispatchNoteSerializer,
+  OutletSerializer,
 )
 
 
@@ -118,8 +121,8 @@ PRODUCT_BODY_NOTE = (
 )
 
 QUANTITY_NOTE = (
-  "`quantity` is read-only: new products start at 0, and sending `quantity` on "
-  "create or update returns a 400. Change stock with the adjust-stock endpoint."
+  "`Quantity` is read-only: sending it on create or update returns a 400." 
+  "Set starting stock with opening_quantity when creating a product (create only, 0 to 1,000,000), then change stock with the adjust-stock endpoint."
 )
 
 OWNER_NOTE = "Owner only; employees get a 403."
@@ -172,6 +175,7 @@ PRODUCT_WRITE_EXAMPLE = {
   "description": "Glucose biscuits, 200 g pack",
   "price": "20.00",
   "cost_price": "16.50",
+  "opening_quantity": 50,
   "low_stock_threshold": 10,
   "category": CATEGORY_ID,
 }
@@ -261,6 +265,7 @@ product_detail_docs = extend_schema_view(
       400: validation_cases(
         ("Missing Fields", {"sku": ["This field is required."]}),
         ("Duplicate SKU", {"sku": ["SKU already exists in your inventory."]}),
+        ("Opening Quantity Not Allowed", {"opening_quantity": ["Opening stock can only be set when creating a product."]}),
         QUANTITY_NOT_ALLOWED,
       ),
       401: UNAUTHORIZED_RESPONSE,
@@ -286,6 +291,7 @@ product_detail_docs = extend_schema_view(
       400: validation_cases(
         ("Invalid Price", {"price": ["A valid number is required."]}),
         ("Duplicate SKU", {"sku": ["SKU already exists in your inventory."]}),
+        ("Opening Quantity Not Allowed", {"opening_quantity": ["Opening stock can only be set when creating a product."]}),
         QUANTITY_NOT_ALLOWED,
       ),
       401: UNAUTHORIZED_RESPONSE,
@@ -298,7 +304,7 @@ product_detail_docs = extend_schema_view(
     summary="Delete Product",
     description=(
       "Permanently deletes the product. To keep it but hide it, set `is_active` "
-      "to false instead. " + OWNER_NOTE
+      "to false instead. This also deletes the product stock history." + OWNER_NOTE
     ),
     responses={
       200: resp("Product deleted.", ok_example("Deleted", "Product deleted.")),
@@ -314,27 +320,48 @@ product_adjust_stock_docs = extend_schema_view(
   post=extend_schema(
     summary="Adjust Product Stock",
     description=(
-      "Adds to or removes from a product's stock. `change` is a whole number between "
+      "Corrects a product's stock up or down. `change` is a whole number between "
       "-1,000,000 and 1,000,000 and cannot be zero: positive adds stock, negative "
-      "removes it. The product row is locked while the change is applied, so "
-      "simultaneous adjustments can't clash. If the result would be below zero, nothing "
-      "changes and a 400 is returned. `reason` is an optional note (up to 255 "
-      "characters); it is accepted but currently not saved. Both the owner and "
-      "employees can adjust stock. Accepts JSON."
+      "removes it. `reason` is either `adjustment` (default: counting errors, found "
+      "stock) or `damaged` (stock lost to damage; `change` must then be negative). "
+      "`note` is an optional free-text explanation (up to 255 characters). Each call "
+      "adds one entry to the stock ledger with the chosen reason and note. The product "
+      "row is locked while the change is applied, so simultaneous adjustments can't "
+      "clash. If the result would be below zero, nothing changes and a 400 is returned. "
+      "Do not use this to send stock to an outlet: record a dispatch instead, because "
+      "only dispatches count as demand for reordering. Both the owner and employees "
+      "can adjust stock. Accepts JSON."
     ),
     request=StockAdjustmentSerializer,
     examples=[
-      OpenApiExample("Add Stock", value={"change": 50, "reason": "New delivery"}, request_only=True),
-      OpenApiExample("Remove Stock", value={"change": -5}, request_only=True),
+      OpenApiExample(
+        "Add Stock",
+        value={"change": 50, "reason": "adjustment", "note": "Found 50 in back store"},
+        request_only=True,
+      ),
+      OpenApiExample(
+        "Remove Stock",
+        value={"change": -5, "reason": "adjustment", "note": "Count correction"},
+        request_only=True,
+      ),
+      OpenApiExample(
+        "Damaged Stock",
+        value={"change": -3, "reason": "damaged", "note": "Water damage"},
+        request_only=True,
+      ),
+      OpenApiExample("Minimal", value={"change": -5}, request_only=True),
     ],
     responses={
       200: resp("Stock updated. Returns the full product.",
                 ok_example("Stock Updated", "Stock updated.",
                            data={**PRODUCT_EXAMPLE, "quantity": 170})),
       400: validation_cases(
-        ("Insufficient Stock", {"change": ["Insufficient stock."]}),
+        ("Insufficient Stock", {"change": ["Insufficient stock for Parle-G Biscuits 200g."]}),
         ("Zero Change", {"change": ["Change cannot be zero."]}),
         ("Invalid Change", {"change": ["A valid integer is required."]}),
+        ("Invalid Reason", {"reason": ['"sold" is not a valid choice.']}),
+        ("Damaged Must Be Negative",
+         {"change": ["Damaged stock must be a negative change."]}),
       ),
       401: UNAUTHORIZED_RESPONSE,
       403: FORBIDDEN_RESPONSE,
@@ -505,6 +532,264 @@ warehouse_docs = extend_schema_view(
       ),
       401: UNAUTHORIZED_RESPONSE,
       403: OWNER_ONLY_RESPONSE,
+      429: THROTTLED_RESPONSE,
+    },
+  ),
+)
+
+OUTLET_ID = "4c8e2b71-6a39-4d05-b2f8-0e7a1d9c5b36"
+DISPATCH_ID = "e5a1c7d3-8b24-4f60-9c1e-3a6d2b8f4e70"
+
+OUTLET_EXAMPLE = {
+  "id": OUTLET_ID,
+  "name": "Andheri Store",
+  "address": "Shop 4, Link Road, Andheri West, Mumbai",
+  "is_active": True,
+  "created_at": "2026-10-05T10:00:00Z",
+  "updated_at": "2026-10-05T10:00:00Z",
+}
+
+DISPATCH_EXAMPLE = {
+  "id": DISPATCH_ID,
+  "number": "DN-0001",
+  "outlet": OUTLET_ID,
+  "outlet_name": "Andheri Store",
+  "dispatch_date": "2026-10-10",
+  "notes": "",
+  "created_by_email": "staff@example.com",
+  "items": [
+    {
+      "id": 1,
+      "product": PRODUCT_ID,
+      "product_name": "Parle-G Biscuits 200g",
+      "product_sku": "PARLEG-200",
+      "quantity": 12,
+    }
+  ],
+  "created_at": "2026-10-10T09:30:00Z",
+}
+
+OUTLET_NOTE = (
+  "An outlet is only a dispatch destination: its stock is not tracked. "
+  "Employees can create outlets (so they can add one while dispatching); "
+  "only the owner can edit or delete them."
+)
+
+outlet_list_create_docs = extend_schema_view(
+  get=extend_schema(
+    operation_id="inventory_outlets_list",
+    summary="List Outlets",
+    description=(
+      "Returns all outlets of the logged-in user's business. Not paginated. "
+      "Use `is_active=true` to get only outlets that can receive dispatches."
+    ),
+    parameters=[
+      OpenApiParameter(
+        "is_active", OpenApiTypes.STR, OpenApiParameter.QUERY,
+        description="`true` or `false`. Any other value is ignored.",
+      ),
+    ],
+    responses={
+      200: resp("Outlet list.",
+                ok_example("Outlets", "Outlet list fetched.", data=[OUTLET_EXAMPLE])),
+      401: UNAUTHORIZED_RESPONSE,
+      403: FORBIDDEN_RESPONSE,
+      429: THROTTLED_RESPONSE,
+    },
+  ),
+  post=extend_schema(
+    summary="Create Outlet",
+    description=(
+      "Creates an outlet in the logged-in user's business. The name must be unique "
+      "within the business, ignoring upper and lower case. " + OUTLET_NOTE
+    ),
+    request=OutletSerializer,
+    examples=[
+      OpenApiExample(
+        "Create Outlet",
+        value={"name": "Andheri Store", "address": "Shop 4, Link Road, Andheri West, Mumbai"},
+        request_only=True,
+      ),
+    ],
+    responses={
+      201: resp("Outlet created.",
+                ok_example("Created", "Outlet created.", data=OUTLET_EXAMPLE)),
+      400: validation_cases(
+        ("Missing Name", {"name": ["This field is required."]}),
+        ("Duplicate Name", {"name": ["Outlet with this name already exists."]}),
+      ),
+      401: UNAUTHORIZED_RESPONSE,
+      403: FORBIDDEN_RESPONSE,
+      429: THROTTLED_RESPONSE,
+    },
+  ),
+)
+
+outlet_detail_docs = extend_schema_view(
+  get=extend_schema(
+    summary="Get Outlet",
+    responses={
+      200: resp("Outlet details.",
+                ok_example("Outlet", "Outlet fetched.", data=OUTLET_EXAMPLE)),
+      401: UNAUTHORIZED_RESPONSE,
+      403: FORBIDDEN_RESPONSE,
+      404: not_found("Outlet"),
+      429: THROTTLED_RESPONSE,
+    },
+  ),
+  put=extend_schema(
+    summary="Replace Outlet",
+    description="Full update. `name` is required. " + OWNER_NOTE,
+    request=OutletSerializer,
+    responses={
+      200: resp("Outlet updated.",
+                ok_example("Updated", "Outlet updated.", data=OUTLET_EXAMPLE)),
+      400: validation_cases(
+        ("Missing Name", {"name": ["This field is required."]}),
+        ("Duplicate Name", {"name": ["Outlet with this name already exists."]}),
+      ),
+      401: UNAUTHORIZED_RESPONSE,
+      403: OWNER_ONLY_RESPONSE,
+      404: not_found("Outlet"),
+      429: THROTTLED_RESPONSE,
+    },
+  ),
+  patch=extend_schema(
+    summary="Update Outlet",
+    description=(
+      "Partial update. Send only the fields you want to change. Set `is_active` to "
+      "false to stop an outlet receiving dispatches while keeping its history. "
+      + OWNER_NOTE
+    ),
+    request=OutletSerializer,
+    examples=[
+      OpenApiExample("Deactivate Outlet", value={"is_active": False}, request_only=True),
+    ],
+    responses={
+      200: resp("Outlet updated.",
+                ok_example("Updated", "Outlet updated.", data=OUTLET_EXAMPLE)),
+      400: validation_cases(
+        ("Blank Name", {"name": ["This field may not be blank."]}),
+        ("Duplicate Name", {"name": ["Outlet with this name already exists."]}),
+      ),
+      401: UNAUTHORIZED_RESPONSE,
+      403: OWNER_ONLY_RESPONSE,
+      404: not_found("Outlet"),
+      429: THROTTLED_RESPONSE,
+    },
+  ),
+  delete=extend_schema(
+    summary="Delete Outlet",
+    description=(
+      "Permanently deletes an outlet that has never received a dispatch. If it has "
+      "dispatch history, a 400 is returned: set `is_active` to false instead. "
+      + OWNER_NOTE
+    ),
+    responses={
+      200: resp("Outlet deleted.", ok_example("Deleted", "Outlet deleted.")),
+      400: validation_cases(
+        ("Has Dispatch History",
+         ["This outlet has dispatch history. Set is_active to false instead."]),
+      ),
+      401: UNAUTHORIZED_RESPONSE,
+      403: OWNER_ONLY_RESPONSE,
+      404: not_found("Outlet"),
+      429: THROTTLED_RESPONSE,
+    },
+  ),
+)
+
+DISPATCH_LIST_PARAMS = [
+  OpenApiParameter("outlet", OpenApiTypes.UUID, OpenApiParameter.QUERY,
+                   description="Only dispatches to this outlet id."),
+  OpenApiParameter("from", OpenApiTypes.DATE, OpenApiParameter.QUERY,
+                   description="Dispatch date on or after this date (YYYY-MM-DD)."),
+  OpenApiParameter("to", OpenApiTypes.DATE, OpenApiParameter.QUERY,
+                   description="Dispatch date on or before this date (YYYY-MM-DD)."),
+  OpenApiParameter("page", OpenApiTypes.INT, OpenApiParameter.QUERY,
+                   description="Page number, starting at 1."),
+  OpenApiParameter("page_size", OpenApiTypes.INT, OpenApiParameter.QUERY,
+                   description="Dispatches per page."),
+]
+
+dispatch_list_create_docs = extend_schema_view(
+  get=extend_schema(
+    operation_id="inventory_dispatches_list",
+    summary="List Dispatches",
+    description=(
+      "Returns a page of dispatch notes of the logged-in user's business, newest "
+      "first, with their items. Results are paginated."
+    ),
+    parameters=DISPATCH_LIST_PARAMS,
+    responses={
+      200: resp("One page of dispatches.",
+                ok_example("Dispatch page", "Dispatch list fetched.", data={
+                  "count": 1, "next": None, "previous": None,
+                  "results": [DISPATCH_EXAMPLE],
+                })),
+      400: validation_cases(
+        ("Invalid Outlet", {"outlet": ["Invalid outlet UUID."]}),
+        ("Invalid Date", {"from": ["Use YYYY-MM-DD."]}),
+      ),
+      401: UNAUTHORIZED_RESPONSE,
+      403: FORBIDDEN_RESPONSE,
+      429: THROTTLED_RESPONSE,
+    },
+  ),
+  post=extend_schema(
+    summary="Record Dispatch",
+    description=(
+      "Sends stock from the warehouse to an outlet. Creates one dispatch note "
+      "(number like `DN-0001`, set by the server) and removes each item's quantity "
+      "from stock through the ledger. It is all or nothing: if any item has "
+      "insufficient stock, nothing is saved. Repeated products are merged. "
+      "`dispatch_date` is optional (defaults to today, cannot be in the future). "
+      "The outlet must be active. Owner and employees can record dispatches. "
+      "Dispatches cannot be edited or deleted: correct a mistake with the "
+      "adjust-stock endpoint. Accepts JSON."
+    ),
+    request=DispatchCreateSerializer,
+    examples=[
+      OpenApiExample(
+        "Dispatch To Outlet",
+        value={
+          "outlet": OUTLET_ID,
+          "dispatch_date": "2026-10-10",
+          "notes": "Weekly refill",
+          "items": [{"product": PRODUCT_ID, "quantity": 12}],
+        },
+        request_only=True,
+      ),
+    ],
+    responses={
+      201: resp("Dispatch recorded.",
+                ok_example("Created", "Dispatch recorded.", data=DISPATCH_EXAMPLE)),
+      400: validation_cases(
+        ("Missing Fields", {
+          "outlet": ["This field is required."],
+          "items": ["This field is required."],
+        }),
+        ("Empty Items", {"items": ["This list may not be empty."]}),
+        ("Future Date", {"dispatch_date": ["Dispatch date cannot be in the future."]}),
+        ("Insufficient Stock",
+         {"change": ["Insufficient stock for Parle-G Biscuits 200g."]}),
+      ),
+      401: UNAUTHORIZED_RESPONSE,
+      403: FORBIDDEN_RESPONSE,
+      429: THROTTLED_RESPONSE,
+    },
+  ),
+)
+
+dispatch_detail_docs = extend_schema_view(
+  get=extend_schema(
+    summary="Get Dispatch",
+    responses={
+      200: resp("Dispatch details.",
+                ok_example("Dispatch", "Dispatch fetched.", data=DISPATCH_EXAMPLE)),
+      401: UNAUTHORIZED_RESPONSE,
+      403: FORBIDDEN_RESPONSE,
+      404: not_found("Dispatch"),
       429: THROTTLED_RESPONSE,
     },
   ),

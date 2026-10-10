@@ -4,6 +4,9 @@ from django.core.validators import MinValueValidator, FileExtensionValidator
 from django.db.models.functions import Lower
 from django.core.exceptions import ValidationError
 
+from django.conf import settings
+from django.utils import timezone
+
 # Create your models here.
 
 class Category(models.Model):
@@ -168,3 +171,116 @@ class Product(models.Model):
 
   def __str__(self):
     return f"{self.name} ({self.sku})"
+
+class Outlet(models.Model):
+
+  id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+  business = models.ForeignKey(
+    "accounts.Business", on_delete=models.CASCADE, related_name="outlets"
+  )
+  name = models.CharField(max_length=100)
+  address = models.TextField(blank=True, default="")
+  is_active = models.BooleanField(default=True)
+  created_at = models.DateTimeField(auto_now_add=True)
+  updated_at = models.DateTimeField(auto_now=True)
+
+  class Meta:
+    ordering = ["name"]
+    constraints = [
+      models.UniqueConstraint(
+        Lower("name"), "business", name="uniq_outlet_name_per_business"
+      ),
+    ]
+
+  def __str__(self):
+    return self.name
+
+
+class DispatchNote(models.Model):
+  id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+  business = models.ForeignKey(
+    "accounts.Business", on_delete=models.CASCADE, related_name="dispatch_notes"
+  )
+  outlet = models.ForeignKey(
+    Outlet, on_delete=models.PROTECT, related_name="dispatches"
+  )
+  number = models.CharField(max_length=20)  # DN-0001, per business
+  dispatch_date = models.DateField(default=timezone.localdate)
+  notes = models.TextField(blank=True, default="")
+  created_by = models.ForeignKey(
+    settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+    related_name="+",
+  )
+  created_at = models.DateTimeField(auto_now_add=True)
+
+  class Meta:
+    ordering = ["-dispatch_date", "-created_at"]
+    constraints = [
+      models.UniqueConstraint(
+        fields=["business", "number"], name="uniq_dispatch_number_per_business"
+      ),
+    ]
+    indexes = [models.Index(fields=["business", "dispatch_date"])]
+
+  def __str__(self):
+    return self.number
+
+
+class DispatchItem(models.Model):
+  dispatch_note = models.ForeignKey(
+    DispatchNote, on_delete=models.CASCADE, related_name="items"
+  )
+  product = models.ForeignKey(
+    Product, on_delete=models.PROTECT, related_name="dispatch_items"
+  )
+  quantity = models.PositiveIntegerField(validators=[MinValueValidator(1)])
+
+  class Meta:
+    constraints = [
+      models.UniqueConstraint(
+        fields=["dispatch_note", "product"], name="uniq_product_per_dispatch"
+      ),
+    ]
+
+
+class StockMovement(models.Model):
+
+  class Reason(models.TextChoices):
+    OPENING_BALANCE = "opening_balance", "Opening balance"
+    GRN_RECEIVED = "grn_received", "GRN received"
+    DISPATCH = "dispatch", "Dispatch"
+    DAMAGED = "damaged", "Damaged"
+    ADJUSTMENT = "adjustment", "Adjustment"
+
+  id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+  business = models.ForeignKey(
+    "accounts.Business", on_delete=models.CASCADE, related_name="stock_movements"
+  )
+  product = models.ForeignKey(
+    Product, on_delete=models.CASCADE, related_name="movements"
+  )
+  quantity_change = models.IntegerField()  # signed: + in, - out
+  balance_after = models.PositiveIntegerField()
+  reason = models.CharField(max_length=20, choices=Reason.choices)
+  dispatch_note = models.ForeignKey(
+    DispatchNote, on_delete=models.SET_NULL, null=True, blank=True,
+    related_name="movements",
+  )
+  note = models.CharField(max_length=255, blank=True, default="")
+  created_by = models.ForeignKey(
+    settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+    related_name="+",
+  )
+  created_at = models.DateTimeField(auto_now_add=True)
+
+  class Meta:
+    ordering = ["-created_at"]
+    indexes = [
+      models.Index(fields=["business", "product", "created_at"]),
+      models.Index(fields=["business", "reason", "created_at"]),
+    ]
+    constraints = [
+      models.CheckConstraint(
+        condition=~models.Q(quantity_change=0), name="movement_change_not_zero"
+      ),
+    ]
