@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from .models import (
-    Category, Product, Warehouse, DispatchItem, DispatchNote, Outlet,
+    Category, Product, Warehouse, DispatchItem, DispatchNote, Outlet, StockMovement,
 )
 from django.utils import timezone
 
@@ -163,6 +163,24 @@ class StockAdjustmentSerializer(serializers.Serializer):
                 {"change": "Damaged stock must be a negative change."}
             )
         return attrs
+
+class StockMovementSerializer(serializers.ModelSerializer):
+    product_name = serializers.CharField(source="product.name", read_only=True)
+    product_sku = serializers.CharField(source="product.sku", read_only=True)
+    dispatch_number = serializers.CharField(
+        source="dispatch_note.number", read_only=True, default=None
+    )
+    created_by_email = serializers.CharField(
+        source="created_by.email", read_only=True, default=None
+    )
+
+    class Meta:
+        model = StockMovement
+        fields = [
+            "id", "product", "product_name", "product_sku", "quantity_change",
+            "balance_after", "reason", "note", "dispatch_number",
+            "created_by_email", "created_at",
+        ]
 
 
 class CategorySerializer(serializers.ModelSerializer):

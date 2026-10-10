@@ -21,7 +21,6 @@ from .serializers import (
   StockAdjustmentSerializer,
   WarehouseSerializer,
   DispatchCreateSerializer,
-  DispatchNoteSerializer,
   OutletSerializer,
 )
 
@@ -790,6 +789,64 @@ dispatch_detail_docs = extend_schema_view(
       401: UNAUTHORIZED_RESPONSE,
       403: FORBIDDEN_RESPONSE,
       404: not_found("Dispatch"),
+      429: THROTTLED_RESPONSE,
+    },
+  ),
+)
+
+MOVEMENT_EXAMPLE = {
+  "id": "b3d7f0a2-5c14-4e89-a6b1-8f2e9c4d1a57",
+  "product": PRODUCT_ID,
+  "product_name": "Parle-G Biscuits 200g",
+  "product_sku": "PARLEG-200",
+  "quantity_change": -12,
+  "balance_after": 108,
+  "reason": "dispatch",
+  "note": "DN-0001",
+  "dispatch_number": "DN-0001",
+  "created_by_email": "staff@example.com",
+  "created_at": "2026-10-10T09:30:00Z",
+}
+
+stock_movement_list_docs = extend_schema_view(
+  get=extend_schema(
+    operation_id="inventory_stock_movements_list",
+    summary="List Stock Movements",
+    description=(
+      "The stock ledger of the logged-in user's business, newest first. Every change "
+      "to a product's stock appears here once and is never edited or deleted. "
+      "`quantity_change` is positive for stock in and negative for stock out; "
+      "`balance_after` is the product's stock after that change. `reason` is one of "
+      "`opening_balance`, `grn_received`, `dispatch`, `damaged`, `adjustment`. "
+      "Results are paginated."
+    ),
+    parameters=[
+      OpenApiParameter("product", OpenApiTypes.UUID, OpenApiParameter.QUERY,
+                       description="Only movements of this product id."),
+      OpenApiParameter("reason", OpenApiTypes.STR, OpenApiParameter.QUERY,
+                       description="Only movements with this reason."),
+      OpenApiParameter("from", OpenApiTypes.DATE, OpenApiParameter.QUERY,
+                       description="On or after this date (YYYY-MM-DD)."),
+      OpenApiParameter("to", OpenApiTypes.DATE, OpenApiParameter.QUERY,
+                       description="On or before this date (YYYY-MM-DD)."),
+      OpenApiParameter("page", OpenApiTypes.INT, OpenApiParameter.QUERY,
+                       description="Page number, starting at 1."),
+      OpenApiParameter("page_size", OpenApiTypes.INT, OpenApiParameter.QUERY,
+                       description="Movements per page."),
+    ],
+    responses={
+      200: resp("One page of stock movements.",
+                ok_example("Movement page", "Stock movement list fetched.", data={
+                  "count": 1, "next": None, "previous": None,
+                  "results": [MOVEMENT_EXAMPLE],
+                })),
+      400: validation_cases(
+        ("Invalid Product", {"product": ["Invalid product UUID."]}),
+        ("Invalid Reason", {"reason": ["Invalid reason."]}),
+        ("Invalid Date", {"from": ["Use YYYY-MM-DD."]}),
+      ),
+      401: UNAUTHORIZED_RESPONSE,
+      403: FORBIDDEN_RESPONSE,
       429: THROTTLED_RESPONSE,
     },
   ),

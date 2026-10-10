@@ -19,4 +19,6 @@ urlpatterns = [
   path("dispatches/",views.DispatchListCreateApi.as_view(),name="dispatch-list",),
   path("dispatches/<uuid:pk>/",views.DispatchDetailApi.as_view(),name="dispatch-detail",),
 
+  path("stock-movements/",views.StockMovementListApi.as_view(),name="stock-movement-list",),
+  
 ]

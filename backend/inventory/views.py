@@ -6,8 +6,9 @@ from rest_framework.views import APIView
 from accounts.responses import success_response
 from .models import Product, Category, StockMovement, Outlet, DispatchNote
 from .serializers import (
-    ProductSerializer, StockAdjustmentSerializer, CategorySerializer,
- WarehouseSerializer, OutletSerializer, DispatchCreateSerializer, DispatchNoteSerializer,
+  ProductSerializer, StockAdjustmentSerializer, CategorySerializer,
+  WarehouseSerializer, OutletSerializer, DispatchCreateSerializer, DispatchNoteSerializer,
+  StockMovementSerializer,
 )
 from .services import get_warehouse
 from .throttles import InventoryThrottle
@@ -32,6 +33,7 @@ from .SwaggerDocs import (
   outlet_detail_docs,
   dispatch_list_create_docs,
   dispatch_detail_docs,
+  stock_movement_list_docs,
 )
 import uuid
 
@@ -509,3 +511,46 @@ class DispatchDetailApi(APIView):
       "Dispatch fetched.",
       DispatchNoteSerializer(note, context={"request": request}).data,
     )
+
+class StockMovementPagination(StandardPagination):
+  message = "Stock movement list fetched."
+
+
+@stock_movement_list_docs
+class StockMovementListApi(APIView):
+  permission_classes = [IsAuthenticated, HasBusinessAccess]
+  throttle_classes = [InventoryThrottle]
+
+  def get(self, request):
+    movements = StockMovement.objects.filter(
+      business=request.business
+    ).select_related("product", "dispatch_note", "created_by")
+
+    product = request.query_params.get("product")
+    if product:
+      try:
+        movements = movements.filter(product_id=uuid.UUID(product))
+      except ValueError:
+        raise ValidationError({"product": "Invalid product UUID."})
+
+    reason = request.query_params.get("reason")
+    if reason:
+      if reason not in StockMovement.Reason.values:
+        raise ValidationError({"reason": "Invalid reason."})
+      movements = movements.filter(reason=reason)
+
+    for param, lookup in (("from", "created_at__date__gte"), ("to", "created_at__date__lte")):
+      raw = request.query_params.get(param)
+      if raw:
+        try:
+          value = parse_date(raw)
+        except ValueError:
+          value = None
+        if value is None:
+          raise ValidationError({param: "Use YYYY-MM-DD."})
+        movements = movements.filter(**{lookup: value})
+
+    paginator = StockMovementPagination()
+    page = paginator.paginate_queryset(movements, request)
+    serializer = StockMovementSerializer(page, many=True, context={"request": request})
+    return paginator.get_paginated_response(serializer.data)
