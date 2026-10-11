@@ -88,7 +88,7 @@ class ProductSerializer(serializers.ModelSerializer):
             "low_stock_threshold",
             "lead_time_days",
             "safety_stock",
-            "reorder_quantity"
+            "reorder_quantity",
             "status",
             "is_active",
             "created_at",
