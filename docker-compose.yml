@@ -35,6 +35,30 @@ services:
       redis:
         condition: service_started
 
+  worker:
+    build: ./backend
+    command: celery -A config worker -l info --concurrency=2
+    volumes:
+      - ./backend:/app
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  beat:
+    build: ./backend
+    command: celery -A config beat -l info -s /tmp/celerybeat-schedule
+    volumes:
+      - ./backend:/app
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_started
+
 volumes:
   postgres_data:
   redis_data:
