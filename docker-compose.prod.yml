@@ -16,5 +16,27 @@ services:
       redis:
         condition: service_started
 
+  worker:
+    build: ./backend
+    restart: unless-stopped
+    command: celery -A config worker -l info --concurrency=2 --max-memory-per-child=300000
+    mem_limit: 500m
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_started
+
+  beat:
+    build: ./backend
+    restart: unless-stopped
+    command: celery -A config beat -l info -s /tmp/celerybeat-schedule
+    mem_limit: 150m
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_started
+
 volumes:
   redis_data:
