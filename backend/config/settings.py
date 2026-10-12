@@ -12,6 +12,7 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 import os
 from dotenv import load_dotenv
 from datetime import timedelta
+from celery.schedules import crontab
 
 load_dotenv()
 from pathlib import Path
@@ -75,6 +76,7 @@ INSTALLED_APPS = [
     'corsheaders',
     'customers',
     'django_cleanup.apps.CleanupConfig',
+    'procurement',
 ]
 
 JAZZMIN_SETTINGS = {
@@ -155,7 +157,12 @@ CELERY_TASK_SOFT_TIME_LIMIT = 240
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 CELERY_TASK_ACKS_LATE = True
 CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
-CELERY_BEAT_SCHEDULE = {}
+CELERY_BEAT_SCHEDULE = {
+    "check-low-stock": {
+        "task": "procurement.tasks.check_low_stock",
+        "schedule": crontab(hour=2, minute=0),
+    },
+}
 
 # Password validation
 # https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators

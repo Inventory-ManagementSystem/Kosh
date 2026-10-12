@@ -56,3 +56,31 @@ class SupplierProfile(models.Model):
 
     def __str__(self):
         return self.company_name
+
+class Supplier(models.Model):
+    """The owner's link to a supplier. All details live on the supplier's SupplierProfile."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    business = models.ForeignKey(
+        "accounts.Business", on_delete=models.CASCADE, related_name="suppliers"
+    )
+    email = models.EmailField()  # always stored lowercase
+    phone = models.CharField(max_length=16, blank=True)
+    label = models.CharField(max_length=100, blank=True)
+    linked_account = models.ForeignKey(
+        SupplierProfile, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="linked_records",
+    )
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                Lower("email"), "business", name="uniq_supplier_email_per_business"
+            ),
+        ]
+
+    def __str__(self):
+        return self.email
