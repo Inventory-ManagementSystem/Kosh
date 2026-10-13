@@ -1,9 +1,11 @@
 from datetime import timedelta
+from decimal import Decimal
 
 from django.utils import timezone
 from rest_framework import serializers
 
-from .models import RFQ, RFQItem, RFQRecipient, ReorderSuggestion
+from .models import RFQ, Quotation, QuotationItem, RFQItem, RFQRecipient, ReorderSuggestion
+from .services import calculate_totals
 
 
 def _category_name(product):
@@ -175,3 +177,197 @@ class SupplierRFQDetailSerializer(SupplierRFQListSerializer):
   class Meta(SupplierRFQListSerializer.Meta):
     fields = SupplierRFQListSerializer.Meta.fields + ["notes", "items"]
     read_only_fields = fields
+
+
+
+def rfq_expected_delivery(rfq):
+  items = list(rfq.items.all())
+  if not items:
+    return None
+  return rfq.created_at.date() + timedelta(days=items[0].product.lead_time_days)
+
+
+class QuotationItemInputSerializer(serializers.Serializer):
+  rfq_item = serializers.UUIDField()
+  quantity = serializers.IntegerField(min_value=1, required=False)
+  unit_price = serializers.DecimalField(
+    max_digits=12, decimal_places=2, min_value=Decimal("0.01")
+  )
+  gst_rate = serializers.DecimalField(
+    max_digits=5, decimal_places=2, min_value=Decimal("0"), max_value=Decimal("40"),
+    default=Decimal("0"),
+  )
+
+
+class QuotationSubmitSerializer(serializers.Serializer):
+  items = QuotationItemInputSerializer(many=True, allow_empty=False)
+  advance_amount = serializers.DecimalField(
+    max_digits=12, decimal_places=2, min_value=Decimal("0"), default=Decimal("0")
+  )
+  delivery_date = serializers.DateField()
+  valid_until = serializers.DateField(required=False)
+  notes = serializers.CharField(
+    max_length=2000, required=False, allow_blank=True, default=""
+  )
+
+  def validate_notes(self, value):
+    return value.strip()
+
+  def validate_delivery_date(self, value):
+    if value < timezone.localdate():
+      raise serializers.ValidationError("Delivery date cannot be in the past.")
+    return value
+
+  def validate_valid_until(self, value):
+    deadline_date = timezone.localdate(self.context["rfq"].deadline)
+    if value < deadline_date:
+      raise serializers.ValidationError(
+        f"Quotation must stay valid at least until the RFQ deadline ({deadline_date})."
+      )
+    return value
+
+  def validate_items(self, items):
+    rfq_items = {item.id: item for item in self.context["rfq"].items.all()}
+    seen = set()
+    for line in items:
+      item = rfq_items.get(line["rfq_item"])
+      if item is None:
+        raise serializers.ValidationError(
+          f"Item {line['rfq_item']} is not part of this RFQ."
+        )
+      if item.id in seen:
+        raise serializers.ValidationError("Each RFQ item can be quoted only once.")
+      seen.add(item.id)
+
+      quantity = line.get("quantity", item.quantity)
+      if quantity > item.quantity:
+        raise serializers.ValidationError(
+          f"You can quote at most {item.quantity} units of {item.product_name}."
+        )
+      line["rfq_item"] = item
+      line["quantity"] = quantity
+    return items
+
+  def validate(self, attrs):
+    _, _, grand_total = calculate_totals(attrs["items"])
+    if attrs["advance_amount"] > grand_total:
+      raise serializers.ValidationError({
+        "advance_amount": [f"Advance payment cannot exceed the total amount (₹{grand_total})."],
+      })
+    return attrs
+
+
+class QuotationItemSerializer(serializers.ModelSerializer):
+  rfq_item_id = serializers.UUIDField(read_only=True)
+  product_name = serializers.CharField(source="rfq_item.product_name", read_only=True)
+  sku = serializers.CharField(source="rfq_item.sku", read_only=True)
+  requested_quantity = serializers.IntegerField(source="rfq_item.quantity", read_only=True)
+
+  class Meta:
+    model = QuotationItem
+    fields = [
+      "id", "rfq_item_id", "product_name", "sku", "requested_quantity",
+      "quantity", "unit_price", "gst_rate", "line_subtotal", "line_tax", "line_total",
+    ]
+    read_only_fields = fields
+
+
+QUOTATION_FIELDS = [
+  "id", "status", "revision", "items",
+  "subtotal", "tax_total", "grand_total", "advance_amount", "balance_amount",
+  "delivery_date", "expected_delivery", "is_late", "late_by_days",
+  "valid_until", "notes", "submitted_at", "updated_at",
+]
+
+
+class QuotationSerializer(serializers.ModelSerializer):
+  items = QuotationItemSerializer(many=True, read_only=True)
+  balance_amount = serializers.SerializerMethodField()
+  expected_delivery = serializers.SerializerMethodField()
+  is_late = serializers.SerializerMethodField()
+  late_by_days = serializers.SerializerMethodField()
+
+  class Meta:
+    model = Quotation
+    fields = QUOTATION_FIELDS
+    read_only_fields = fields
+
+  def get_balance_amount(self, obj):
+    return str(obj.grand_total - obj.advance_amount)
+
+  def get_expected_delivery(self, obj):
+    return rfq_expected_delivery(obj.rfq)
+
+  def get_late_by_days(self, obj):
+    expected = rfq_expected_delivery(obj.rfq)
+    if expected is None or obj.delivery_date <= expected:
+      return 0
+    return (obj.delivery_date - expected).days
+
+  def get_is_late(self, obj):
+    return self.get_late_by_days(obj) > 0
+
+
+class OwnerQuotationSerializer(QuotationSerializer):
+  supplier_profile_id = serializers.UUIDField(read_only=True)
+  company_name = serializers.CharField(source="supplier_profile.company_name", read_only=True)
+  city = serializers.CharField(source="supplier_profile.city", read_only=True)
+  supplier_verified = serializers.BooleanField(source="supplier_profile.is_verified", read_only=True)
+  source = serializers.CharField(source="recipient.source", read_only=True)
+
+  class Meta(QuotationSerializer.Meta):
+    fields = QUOTATION_FIELDS + [
+      "supplier_profile_id", "company_name", "city", "supplier_verified", "source",
+    ]
+    read_only_fields = fields
+
+
+class SupplierRFQInboxDetailSerializer(SupplierRFQDetailSerializer):
+  category = serializers.SerializerMethodField()
+  product_name = serializers.SerializerMethodField()
+  sku = serializers.SerializerMethodField()
+  required_quantity = serializers.SerializerMethodField()
+  expected_delivery = serializers.SerializerMethodField()
+  can_quote = serializers.SerializerMethodField()
+  my_quotation = serializers.SerializerMethodField()
+
+  class Meta(SupplierRFQDetailSerializer.Meta):
+    fields = SupplierRFQDetailSerializer.Meta.fields + [
+      "category", "product_name", "sku", "required_quantity", "expected_delivery",
+      "can_quote", "my_quotation",
+    ]
+    read_only_fields = fields
+
+  def _first_item(self, obj):
+    items = list(obj.rfq.items.all())
+    return items[0] if items else None
+
+  def get_category(self, obj):
+    item = self._first_item(obj)
+    return _category_name(item.product) if item else None
+
+  def get_product_name(self, obj):
+    item = self._first_item(obj)
+    return item.product_name if item else None
+
+  def get_sku(self, obj):
+    item = self._first_item(obj)
+    return item.sku if item else None
+
+  def get_required_quantity(self, obj):
+    item = self._first_item(obj)
+    return item.quantity if item else None
+
+  def get_expected_delivery(self, obj):
+    return rfq_expected_delivery(obj.rfq)
+
+  def get_can_quote(self, obj):
+    return obj.rfq.status == RFQ.Status.OPEN and obj.rfq.deadline > timezone.now()
+
+  def get_my_quotation(self, obj):
+    try:
+      quotation = obj.quotation
+    except Quotation.DoesNotExist:
+      return None
+    quotation.rfq = obj.rfq 
+    return QuotationSerializer(quotation).data

@@ -5,28 +5,51 @@ from django.shortcuts import render
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from drf_spectacular.utils import OpenApiParameter, extend_schema
-from rest_framework.permissions import SAFE_METHODS
+from rest_framework import status
+from rest_framework.exceptions import NotFound
+from rest_framework.permissions import SAFE_METHODS, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from accounts.pagination import StandardPagination
 from accounts.permissions import HasBusinessAccess, IsOwner
+from accounts.responses import error_response, success_response, validation_error_response
 from accounts.swagger import UNAUTHORIZED_RESPONSE, ok_example, resp
+from suppliers.permissions import IsSupplier
 
 from .SwaggerDocs import (
   reorder_alert_list_docs,
+  rfq_quotation_list_docs,
+  supplier_quotation_docs,
+  supplier_rfq_decline_docs,
+  supplier_rfq_detail_docs,
+  supplier_rfq_list_docs,
   rfq_cancel_docs,
   rfq_detail_docs,
   rfq_list_docs,
   rfq_summary_docs,
 )
 
-from .models import RFQ, ReorderSuggestion
+from .models import RFQ, Quotation, RFQRecipient, ReorderSuggestion
 from .serializers import (
+  OwnerQuotationSerializer,
+  QuotationSerializer,
+  QuotationSubmitSerializer,
   RFQDetailSerializer,
   RFQListSerializer,
   RFQUpdateSerializer,
   ReorderAlertSerializer,
+  SupplierRFQInboxDetailSerializer,
+  SupplierRFQListSerializer,
 )
+from .services import (
+  QuotationError,
+  decline_rfq,
+  ensure_rfq_accepting,
+  mark_viewed,
+  submit_quotation,
+  withdraw_quotation,
+)
+from .throttles import QuotationWriteThrottle
 
 def paginated_response(request, queryset, serializer_class, message):
   paginator = StandardPagination()
@@ -136,3 +159,143 @@ class ReorderAlertListApi(APIView):
       .select_related("product__category")
     )
     return paginated_response(request, qs, ReorderAlertSerializer, "Alerts fetched.")
+
+
+
+def supplier_rfq_queryset(supplier):
+  return (
+    RFQRecipient.objects.filter(supplier_profile=supplier)
+    .select_related("rfq__business", "quotation")
+    .prefetch_related("rfq__items__product__category", "quotation__items__rfq_item")
+    .order_by("-created_at")
+  )
+
+
+def get_invitation(queryset, pk):
+  recipient = queryset.filter(pk=pk).first()
+  if recipient is None:
+    raise NotFound("RFQ not found.")
+  return recipient
+
+
+def quotation_error_response(err):
+  return error_response(err.message, err.code, status=status.HTTP_400_BAD_REQUEST)
+
+
+def quotation_with_relations(**filters):
+  return (
+    Quotation.objects.filter(**filters)
+    .select_related("rfq")
+    .prefetch_related("items__rfq_item", "rfq__items__product")
+    .first()
+  )
+
+
+@supplier_rfq_list_docs
+class SupplierRFQListApi(APIView):
+  permission_classes = [IsAuthenticated, IsSupplier]
+
+  def get(self, request):
+    qs = supplier_rfq_queryset(request.supplier)
+    status_param = request.query_params.get("status")
+    if status_param in RFQRecipient.Status.values:
+      qs = qs.filter(status=status_param)
+    if request.query_params.get("open") == "true":
+      qs = qs.filter(rfq__status=RFQ.Status.OPEN, rfq__deadline__gt=timezone.now())
+    return paginated_response(request, qs, SupplierRFQListSerializer, "RFQs fetched.")
+
+
+@supplier_rfq_detail_docs
+class SupplierRFQDetailApi(APIView):
+  permission_classes = [IsAuthenticated, IsSupplier]
+
+  def get(self, request, pk):
+    recipient = get_invitation(supplier_rfq_queryset(request.supplier), pk)
+    mark_viewed(recipient)
+    return success_response("RFQ fetched.", SupplierRFQInboxDetailSerializer(recipient).data)
+
+
+@supplier_quotation_docs
+class SupplierQuotationApi(APIView):
+  permission_classes = [IsAuthenticated, IsSupplier]
+  throttle_classes = [QuotationWriteThrottle]
+
+  def _recipient(self, request, pk):
+    return get_invitation(
+      RFQRecipient.objects.filter(supplier_profile=request.supplier).select_related("rfq"),
+      pk,
+    )
+
+  def get(self, request, pk):
+    recipient = self._recipient(request, pk)
+    quotation = quotation_with_relations(recipient=recipient)
+    if quotation is None:
+      return error_response(
+        "You have not quoted on this RFQ yet.", "NO_QUOTATION",
+        status=status.HTTP_404_NOT_FOUND,
+      )
+    return success_response("Quotation fetched.", QuotationSerializer(quotation).data)
+
+  def put(self, request, pk):
+    recipient = self._recipient(request, pk)
+    try:
+      ensure_rfq_accepting(recipient.rfq) 
+    except QuotationError as err:
+      return quotation_error_response(err)
+
+    serializer = QuotationSubmitSerializer(data=request.data, context={"rfq": recipient.rfq})
+    if not serializer.is_valid():
+      return validation_error_response(serializer)
+
+    try:
+      quotation, created = submit_quotation(recipient, serializer.validated_data)
+    except QuotationError as err:
+      return quotation_error_response(err)
+
+    quotation = quotation_with_relations(pk=quotation.pk)
+    return success_response(
+      "Quotation submitted." if created else "Quotation revised.",
+      QuotationSerializer(quotation).data,
+      status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+    )
+
+  def delete(self, request, pk):
+    recipient = self._recipient(request, pk)
+    try:
+      withdraw_quotation(recipient)
+    except QuotationError as err:
+      return quotation_error_response(err)
+    return success_response("Quotation withdrawn.")
+
+
+@supplier_rfq_decline_docs
+class SupplierRFQDeclineApi(APIView):
+  permission_classes = [IsAuthenticated, IsSupplier]
+  throttle_classes = [QuotationWriteThrottle]
+
+  def post(self, request, pk):
+    recipient = get_invitation(
+      RFQRecipient.objects.filter(supplier_profile=request.supplier), pk
+    )
+    try:
+      decline_rfq(recipient)
+    except QuotationError as err:
+      return quotation_error_response(err)
+    return success_response("RFQ declined.")
+
+
+@rfq_quotation_list_docs
+class RFQQuotationListApi(APIView):
+  permission_classes = [HasBusinessAccess]
+
+  def get(self, request, pk):
+    rfq = get_object_or_404(RFQ, pk=pk, business=request.business)
+    quotations = (
+      rfq.quotations.exclude(status=Quotation.Status.WITHDRAWN)
+      .select_related("rfq", "supplier_profile", "recipient")
+      .prefetch_related("items__rfq_item", "rfq__items__product")
+      .order_by("grand_total", "submitted_at")
+    )
+    return success_response(
+      "Quotations fetched.", OwnerQuotationSerializer(quotations, many=True).data
+    )  
