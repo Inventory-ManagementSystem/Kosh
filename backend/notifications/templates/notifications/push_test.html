@@ -1,0 +1,91 @@
+  <!doctype html>
+  <html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Kosh push test</title>
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-messaging-compat.js"></script>
+    <style>
+      body { font-family: system-ui, sans-serif; max-width: 640px; margin: 32px auto; padding: 0 16px; }
+      textarea { width: 100%; height: 80px; }
+      button { margin: 6px 6px 0 0; padding: 8px 14px; }
+      pre { background: #f3f3f3; padding: 12px; white-space: pre-wrap; word-break: break-all; }
+    </style>
+  </head>
+  <body>
+    <h1>Kosh push test (Firebase, DEBUG only)</h1>
+    <p>1. Log in through Swagger and paste the <code>access</code> token here.</p>
+    <textarea id="token" placeholder="eyJhbGciOi..."></textarea>
+    <p>2. Allow notifications and register this browser, then send a test push.</p>
+    <button id="enable">Enable push</button>
+    <button id="test">Send test push</button>
+    <button id="disable">Disable push</button>
+    <pre id="log">Ready.</pre>
+
+  <script>
+  const API = "/notifications/push/";
+  const log = (msg) => { document.getElementById("log").textContent = msg; };
+  let messaging = null;
+  let registration = null;
+  let vapidKey = null;
+
+  function headers() {
+    return {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer " + document.getElementById("token").value.trim(),
+    };
+  }
+
+  async function call(method, path, body) {
+    const res = await fetch(API + path, { method, headers: headers(), body: body && JSON.stringify(body) });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(res.status + " " + JSON.stringify(json));
+    return json;
+  }
+
+  async function setup() {
+    if (messaging) return;
+    const config = (await call("GET", "config/")).data;
+    vapidKey = config.vapid_key;
+    firebase.initializeApp(config.firebase);
+    messaging = firebase.messaging();
+    registration = await navigator.serviceWorker.register("sw.js");
+    await navigator.serviceWorker.ready;
+    // While this page is open and focused, Firebase calls onMessage instead of
+    // the service worker, so show the notification ourselves
+    messaging.onMessage((payload) => {
+      const d = payload.data || {};
+      registration.showNotification(d.title || "Kosh", { body: d.body || "" });
+    });
+  }
+
+  document.getElementById("enable").onclick = async () => {
+    try {
+      if (!("serviceWorker" in navigator) || !("Notification" in window)) throw new Error("Push not supported in this browser.");
+      const permission = await Notification.requestPermission();
+      if (permission !== "granted") throw new Error("Permission: " + permission);
+      await setup();
+      const fcmToken = await messaging.getToken({ vapidKey, serviceWorkerRegistration: registration });
+      await call("POST", "register/", { token: fcmToken });
+      log("Registered. Now click 'Send test push'.\nFCM token: " + fcmToken.slice(0, 40) + "...");
+    } catch (e) { log("Error: " + e.message); }
+  };
+
+  document.getElementById("test").onclick = async () => {
+    try { log("Sent to " + (await call("POST", "test/")).data.sent + " device(s)."); }
+    catch (e) { log("Error: " + e.message); }
+  };
+
+  document.getElementById("disable").onclick = async () => {
+    try {
+      await setup();
+      const fcmToken = await messaging.getToken({ vapidKey, serviceWorkerRegistration: registration });
+      await call("POST", "unregister/", { token: fcmToken });
+      await messaging.deleteToken();
+      log("Unregistered.");
+    } catch (e) { log("Error: " + e.message); }
+  };
+  </script>
+  </body>
+  </html>

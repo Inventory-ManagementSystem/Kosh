@@ -49,6 +49,13 @@ DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL")
 EMAIL_TIMEOUT=10
 FRONTEND_URL = os.getenv("FRONTEND_URL", "https://koshh.me")
 
+FIREBASE_CREDENTIALS_B64 = os.getenv("FIREBASE_CREDENTIALS_B64", "")
+FIREBASE_WEB_API_KEY = os.getenv("FIREBASE_WEB_API_KEY", "")
+FIREBASE_PROJECT_ID = os.getenv("FIREBASE_PROJECT_ID", "")
+FIREBASE_MESSAGING_SENDER_ID = os.getenv("FIREBASE_MESSAGING_SENDER_ID", "")
+FIREBASE_APP_ID = os.getenv("FIREBASE_APP_ID", "")
+FIREBASE_VAPID_KEY = os.getenv("FIREBASE_VAPID_KEY", "")
+
 # Application definition
 SITE_ID=1
 INSTALLED_APPS = [
@@ -64,6 +71,7 @@ INSTALLED_APPS = [
     'accounts.apps.AccountsConfig',
     'inventory',
     'suppliers',
+    'notifications',
     'rest_framework_simplejwt.token_blacklist',
     'django.contrib.sites',
     'allauth',
