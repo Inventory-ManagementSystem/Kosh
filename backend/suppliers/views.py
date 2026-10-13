@@ -1,4 +1,6 @@
 from django.db import IntegrityError, transaction
+from django.db.models import ProtectedError, Q
+from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import OpenApiExample, extend_schema
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
@@ -8,11 +10,18 @@ from rest_framework.views import APIView
 from accounts.models import Business, Employee, EmployeeInvite
 from accounts.responses import error_response, success_response, validation_error_response
 from accounts.swagger import UNAUTHORIZED_RESPONSE, THROTTLED_EXAMPLE, err_example, ok_example, resp
-from .models import SupplierProfile, SupplyCategory
+from .models import SupplierProfile, SupplyCategory, Supplier
+from accounts.permissions import HasBusinessAccess, IsOwnerOrReadOnly
 from .permissions import IsSupplier
-from .serializers import SupplierProfileSerializer, SupplyCategorySerializer
-from .throttles import SupplierRegistrationThrottle
+from .serializers import SupplierProfileSerializer, SupplyCategorySerializer, OwnerSupplierSerializer
+from .throttles import SupplierRegistrationThrottle, OwnerSupplierThrottle
 
+from .SwaggerDocs import owner_supplier_list_create_docs, owner_supplier_detail_docs
+
+import logging
+logger = logging.getLogger(__name__)
+from django.conf import settings
+from django.core.mail import send_mail
 
 SUPPLIER_EXAMPLE = {
   "id": "3f0c2a1e-8b7d-4c5e-9a10-2b3c4d5e6f70",
@@ -145,6 +154,9 @@ class SupplierRegistrationApi(APIView):
     try:
       with transaction.atomic():
         profile = serializer.save(user=user)
+        Supplier.objects.filter(
+          email__iexact=user.email, linked_account__isnull=True
+        ).update(linked_account=profile)
     except IntegrityError:
       if SupplierProfile.objects.filter(user=user).exists():
         return error_response(
@@ -230,3 +242,102 @@ class MySupplierProfileApi(APIView):
       )
 
     return success_response("Supplier profile updated.", serializer.data)
+
+@owner_supplier_list_create_docs
+class OwnerSupplierListCreateApi(APIView):
+  permission_classes = [IsAuthenticated, HasBusinessAccess, IsOwnerOrReadOnly]
+  throttle_classes = [OwnerSupplierThrottle]
+
+  def get(self, request):
+    suppliers = (
+      Supplier.objects.filter(business=request.business)
+      .select_related("linked_account")
+      .prefetch_related("linked_account__categories")
+    )
+    search = request.query_params.get("search")
+    if search:
+      suppliers = suppliers.filter(
+        Q(email__icontains=search)
+        | Q(label__icontains=search)
+        | Q(linked_account__company_name__icontains=search)
+      )
+    is_active = request.query_params.get("is_active")
+    if is_active in ("true", "false"):
+      suppliers = suppliers.filter(is_active=(is_active == "true"))
+    serializer = OwnerSupplierSerializer(suppliers, many=True, context={"request": request})
+    return success_response("Supplier list fetched.", serializer.data)
+
+  def post(self, request):
+    serializer = OwnerSupplierSerializer(data=request.data, context={"request": request})
+    if not serializer.is_valid():
+      return validation_error_response(serializer)
+    try:
+      with transaction.atomic():
+        supplier = serializer.save(business=request.business)
+    except IntegrityError:
+      return error_response(
+        "This supplier is already in your list.", "SUPPLIER_EXISTS",
+        status=status.HTTP_409_CONFLICT,
+      )
+
+    if supplier.linked_account_id is None:
+      try:
+        send_mail(
+          f"{request.business.business_name} has invited you to supply on Kosh",
+          (
+            f"{request.business.business_name} wants to send you requests for "
+            "quotation on Kosh.\n\n"
+            f"Sign up or log in with this email address ({supplier.email}), "
+            "choose the Supplier option, and register your agency:\n"
+            f"{settings.FRONTEND_URL}/role"
+          ),
+          None,
+          [supplier.email],
+        )
+      except Exception:
+        logger.exception("Supplier invite email failed")
+
+    return success_response("Supplier created.", serializer.data, status=status.HTTP_201_CREATED)
+
+@owner_supplier_detail_docs
+class OwnerSupplierDetailApi(APIView):
+  permission_classes = [IsAuthenticated, HasBusinessAccess, IsOwnerOrReadOnly]
+  throttle_classes = [OwnerSupplierThrottle]
+
+  def get_supplier(self, request, pk):
+    return get_object_or_404(Supplier.objects.select_related("linked_account"), pk=pk, business=request.business)
+
+  def get(self, request, pk):
+    serializer = OwnerSupplierSerializer(
+      self.get_supplier(request, pk), context={"request": request}
+    )
+    return success_response("Supplier fetched.", serializer.data)
+
+  def patch(self, request, pk):
+    serializer = OwnerSupplierSerializer(
+      self.get_supplier(request, pk), data=request.data, partial=True,
+      context={"request": request},
+    )
+    if not serializer.is_valid():
+      return validation_error_response(serializer)
+    try:
+      with transaction.atomic():
+        serializer.save()
+    except IntegrityError:
+      return error_response(
+        "A supplier with this email already exists.", "SUPPLIER_EXISTS",
+        status=status.HTTP_409_CONFLICT,
+      )
+    return success_response("Supplier updated.", serializer.data)
+
+  def delete(self, request, pk):
+    supplier = self.get_supplier(request, pk)
+    try:
+      supplier.delete()
+    except ProtectedError:
+      return error_response(
+        "This supplier has RFQ history. Set is_active to false instead.",
+        "SUPPLIER_HAS_HISTORY",
+        status=status.HTTP_409_CONFLICT,
+      )
+    return success_response("Supplier deleted.")
