@@ -5,7 +5,9 @@ from django.db import models
 import uuid
 from django.db import models
 from django.conf import settings
-from django.core.validators import MinValueValidator
+from decimal import Decimal
+
+from django.core.validators import MaxValueValidator, MinValueValidator
 
 
 class ReorderSuggestion(models.Model):
@@ -140,3 +142,84 @@ class RFQRecipient(models.Model):
 
   def __str__(self):
     return f"{self.rfq.number} -> {self.supplier_profile.company_name}"
+
+
+MONEY = {"max_digits": 12, "decimal_places": 2}
+
+
+class Quotation(models.Model):
+  class Status(models.TextChoices):
+    SUBMITTED = "submitted", "Submitted"
+    WITHDRAWN = "withdrawn", "Withdrawn"
+    ACCEPTED = "accepted", "Accepted"
+    REJECTED = "rejected", "Rejected"  
+
+  DECIDED = (Status.ACCEPTED, Status.REJECTED)
+
+  id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+  rfq = models.ForeignKey(RFQ, on_delete=models.CASCADE, related_name="quotations")
+  recipient = models.OneToOneField(
+    RFQRecipient, on_delete=models.CASCADE, related_name="quotation"
+  )
+  supplier_profile = models.ForeignKey(
+    "suppliers.SupplierProfile", on_delete=models.PROTECT, related_name="quotations"
+  )
+  status = models.CharField(max_length=10, choices=Status.choices, default=Status.SUBMITTED)
+
+  delivery_date = models.DateField()
+  advance_amount = models.DecimalField(
+    **MONEY, default=0, validators=[MinValueValidator(0)]
+  )
+  valid_until = models.DateField() 
+  notes = models.TextField(blank=True, default="")
+
+  subtotal = models.DecimalField(**MONEY, default=0)
+  tax_total = models.DecimalField(**MONEY, default=0)
+  grand_total = models.DecimalField(**MONEY, default=0)
+
+  revision = models.PositiveIntegerField(default=1)
+  submitted_at = models.DateTimeField()
+  created_at = models.DateTimeField(auto_now_add=True)
+  updated_at = models.DateTimeField(auto_now=True)
+
+  class Meta:
+    ordering = ["grand_total", "submitted_at"]
+    constraints = [
+      models.CheckConstraint(
+        condition=models.Q(advance_amount__gte=0)
+        & models.Q(advance_amount__lte=models.F("grand_total")),
+        name="quotation_advance_within_total",
+      ),
+    ]
+    indexes = [
+      models.Index(fields=["rfq", "status"]),
+      models.Index(fields=["supplier_profile", "status"]),
+    ]
+
+  def __str__(self):
+    return f"{self.rfq.number} / {self.supplier_profile.company_name}"
+
+
+class QuotationItem(models.Model):
+  id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+  quotation = models.ForeignKey(Quotation, on_delete=models.CASCADE, related_name="items")
+  rfq_item = models.ForeignKey(RFQItem, on_delete=models.CASCADE, related_name="quoted_items")
+  quantity = models.PositiveIntegerField(validators=[MinValueValidator(1)])
+  unit_price = models.DecimalField(**MONEY, validators=[MinValueValidator(Decimal("0.01"))])
+  gst_rate = models.DecimalField(
+    max_digits=5, decimal_places=2, default=0,
+    validators=[MinValueValidator(0), MaxValueValidator(40)],
+  )
+  line_subtotal = models.DecimalField(**MONEY)
+  line_tax = models.DecimalField(**MONEY)
+  line_total = models.DecimalField(**MONEY)
+
+  class Meta:
+    constraints = [
+      models.UniqueConstraint(
+        fields=["quotation", "rfq_item"], name="uniq_rfq_item_per_quotation"
+      ),
+    ]
+
+  def __str__(self):
+    return f"{self.rfq_item.product_name} x {self.quantity} @ {self.unit_price}"
