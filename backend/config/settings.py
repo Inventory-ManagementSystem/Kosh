@@ -170,6 +170,15 @@ CELERY_BEAT_SCHEDULE = {
         "task": "procurement.tasks.check_low_stock",
         "schedule": crontab(hour=2, minute=0),
     },
+    "create-auto-rfqs": {
+        "task": "procurement.tasks.create_auto_rfqs",
+        "schedule": crontab(hour=2, minute=10),
+    },
+    "close-expired-rfqs": {
+        "task": "procurement.tasks.close_expired_rfqs",
+        "schedule": crontab(minute=0),
+    },
+
 }
 
 # Password validation

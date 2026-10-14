@@ -5,8 +5,9 @@ from accounts.models import Business
 from inventory.models import Product
 from inventory.reorder import calculate_reorder, get_dispatch_stats
 
-from .models import ReorderSuggestion
-
+from .models import RFQ, ReorderSuggestion
+from django.utils import timezone
+from .rfq_services import RFQCreationError, create_rfq_for_suggestion
 
 @shared_task
 def check_low_stock():
@@ -40,3 +41,25 @@ def check_low_stock():
       except IntegrityError:
         pass
   return created
+
+@shared_task
+def create_auto_rfqs():
+  created = 0
+  suggestions = ReorderSuggestion.objects.filter(
+    status=ReorderSuggestion.Status.OPEN, method="formula"
+  )
+  for suggestion in suggestions.iterator():
+    try:
+      create_rfq_for_suggestion(suggestion)
+      created += 1
+    except RFQCreationError:
+      continue
+  return created
+
+
+@shared_task
+def close_expired_rfqs():
+  now = timezone.now()
+  return RFQ.objects.filter(status=RFQ.Status.OPEN, deadline__lte=now).update(
+    status=RFQ.Status.CLOSED, updated_at=now
+  )
