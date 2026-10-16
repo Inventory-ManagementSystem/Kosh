@@ -6,5 +6,11 @@ urlpatterns = [
   path("rfqs/summary/", views.RFQSummaryApi.as_view(), name="rfq-summary"),
   path("rfqs/<uuid:pk>/", views.RFQDetailApi.as_view(), name="rfq-detail"),
   path("rfqs/<uuid:pk>/cancel/", views.RFQCancelApi.as_view(), name="rfq-cancel"),
+  path("rfqs/<uuid:pk>/quotations/", views.RFQQuotationListApi.as_view(), name="rfq-quotation-list"),
   path("alerts/", views.ReorderAlertListApi.as_view(), name="reorder-alert-list"),
+
+  path("supplier/rfqs/", views.SupplierRFQListApi.as_view(), name="supplier-rfq-list"),
+  path("supplier/rfqs/<uuid:pk>/", views.SupplierRFQDetailApi.as_view(), name="supplier-rfq-detail"),
+  path("supplier/rfqs/<uuid:pk>/quotation/", views.SupplierQuotationApi.as_view(), name="supplier-quotation"),
+  path("supplier/rfqs/<uuid:pk>/decline/", views.SupplierRFQDeclineApi.as_view(), name="supplier-rfq-decline"),
 ]
