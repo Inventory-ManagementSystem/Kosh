@@ -16,5 +16,6 @@ urlpatterns = [
   path("alerts/<uuid:pk>/create-rfq/", views.ReorderAlertCreateRFQApi.as_view(), name="reorder-alert-create-rfq"),
   path("alerts/create-rfq/", views.ReorderAlertBulkCreateRFQApi.as_view(), name="reorder-alert-bulk-create-rfq"),
   path("alerts/<uuid:pk>/dismiss/", views.ReorderAlertDismissApi.as_view(), name="reorder-alert-dismiss"),
+  path("alerts/refresh/", views.ReorderAlertRefreshApi.as_view(), name="reorder-alert-refresh"),
 
 ]

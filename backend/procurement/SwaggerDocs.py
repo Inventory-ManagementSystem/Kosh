@@ -1007,3 +1007,35 @@ reorder_alert_bulk_create_rfq_docs = extend_schema_view(
     },
   ),
 )
+
+reorder_alert_refresh_docs = extend_schema_view(
+  post=extend_schema(
+    operation_id="procurement_alerts_refresh",
+    summary="Refresh Alerts",
+    description=(
+      "Runs the low-stock check for the logged-in user's business right now, "
+      "instead of waiting for the nightly check. A new alert is created for every "
+      "active product that has reached its reorder point and has no active alert "
+      "yet. Existing alerts are left alone, so calling it again is safe. It does not "
+      "create any RFQ. `created` is how many new alerts this call made and "
+      "`active_alerts` is the total number of active alerts afterwards. "
+      "No request body is needed. " + OWNER_NOTE
+    ),
+    request=None,
+    responses={
+      200: resp(
+        "Alerts refreshed.",
+        ok_example(
+          "New Alerts", "Alerts refreshed.",
+          data={"created": 3, "active_alerts": 5},
+        ),
+        ok_example(
+          "Nothing New", "Alerts refreshed.",
+          data={"created": 0, "active_alerts": 5},
+        ),
+      ),
+      401: UNAUTHORIZED_RESPONSE,
+      403: OWNER_ONLY_RESPONSE,
+    },
+  ),
+)

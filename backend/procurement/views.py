@@ -18,6 +18,7 @@ from suppliers.permissions import IsSupplier
 from django.db import transaction
 from notifications.models import Notification
 from notifications.services import notify_many
+from .alert_services import create_alerts_for_business
 
 from .SwaggerDocs import (
   reorder_alert_list_docs,
@@ -33,6 +34,7 @@ from .SwaggerDocs import (
   reorder_alert_create_rfq_docs,
   reorder_alert_dismiss_docs,
   reorder_alert_bulk_create_rfq_docs,
+  reorder_alert_refresh_docs,
 )
 
 from .models import RFQ, Quotation, RFQRecipient, ReorderSuggestion
@@ -201,6 +203,18 @@ class ReorderAlertListApi(APIView):
     return paginated_response(request, qs, ReorderAlertSerializer, "Alerts fetched.")
 
 
+@reorder_alert_refresh_docs
+class ReorderAlertRefreshApi(APIView):
+  permission_classes = [HasBusinessAccess, IsOwner]
+
+  def post(self, request):
+    created = create_alerts_for_business(request.business)
+    active = ReorderSuggestion.objects.filter(
+      business=request.business, status__in=ReorderSuggestion.ACTIVE
+    ).count()
+    return success_response(
+      "Alerts refreshed.", {"created": created, "active_alerts": active}
+    )
 
 def supplier_rfq_queryset(supplier):
   return (
