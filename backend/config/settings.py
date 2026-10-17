@@ -170,6 +170,14 @@ CELERY_BEAT_SCHEDULE = {
         "task": "procurement.tasks.check_low_stock",
         "schedule": crontab(hour=2, minute=0),
     },
+    "rfq-deadline-reminders": {
+        "task": "procurement.tasks.send_rfq_deadline_reminders",
+        "schedule": crontab(minute=0),
+    },
+    "rfq-deadlines-passed": {
+        "task": "procurement.tasks.notify_rfq_deadlines_passed",
+        "schedule": crontab(minute=0),  
+    },
 }
 
 # Password validation
