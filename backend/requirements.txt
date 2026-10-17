@@ -21,3 +21,4 @@ ruff==0.16.10
 Pillow
 django-cleanup
 celery
+reportlab==5.0.1
