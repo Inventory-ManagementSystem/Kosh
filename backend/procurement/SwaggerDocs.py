@@ -17,6 +17,25 @@ from accounts.swagger import (
 from .serializers import QuotationSubmitSerializer, RFQUpdateSerializer, RFQCreateSerializer, RFQUpdateSerializer, BulkRFQCreateSerializer
 
 
+RFQ_ITEMS_EXAMPLE = [
+  {
+    "id": "1f4a9d63-8c2e-47b0-a5d7-3e9b0c6a2f18",
+    "product": "5d0c7e91-4b3a-4a28-8f16-c2e9a7b1d054",
+    "product_name": "Amul Dahi",
+    "sku": "SKU-787328",
+    "category": "Dairy",
+    "quantity": 70,
+  },
+  {
+    "id": "8c3e5a17-d204-4b69-93f1-6a0b7e2d9c45",
+    "product": "a1b2c3d4-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+    "product_name": "Amul Milk 1L",
+    "sku": "SKU-202",
+    "category": "Dairy",
+    "quantity": 70,
+  },
+]
+
 RFQ_LIST_ITEM_EXAMPLE = {
   "id": "c3d8a2f1-6b47-4e09-9a15-2f7e1b8d4c60",
   "number": "RFQ-0007",
@@ -24,10 +43,10 @@ RFQ_LIST_ITEM_EXAMPLE = {
   "deadline": "2026-10-16T18:30:00Z",
   "include_platform_pool": False,
   "auto_generated": True,
-  "product_name": "Amul Milk 1L",
-  "sku": "SKU-202",
-  "category": "Dairy",
-  "quantity": 70,
+  "supply_category": "Dairy",
+  "item_count": 2,
+  "total_quantity": 140,
+  "items": RFQ_ITEMS_EXAMPLE,
   "expected_delivery": "2026-10-20",
   "recipient_count": 3,
   "quoted_count": 1,
@@ -37,16 +56,9 @@ RFQ_LIST_ITEM_EXAMPLE = {
 RFQ_DETAIL_EXAMPLE = {
   **RFQ_LIST_ITEM_EXAMPLE,
   "notes": "",
-  "reorder_suggestion_ids": ["9e1b5c72-0a3d-4f86-b2c4-7d6a8e0f1b35"],
-  "items": [
-    {
-      "id": "1f4a9d63-8c2e-47b0-a5d7-3e9b0c6a2f18",
-      "product": "5d0c7e91-4b3a-4a28-8f16-c2e9a7b1d054",
-      "product_name": "Amul Milk 1L",
-      "sku": "SKU-202",
-      "category": "Dairy",
-      "quantity": 70,
-    }
+  "reorder_suggestion_ids": [
+    "9e1b5c72-0a3d-4f86-b2c4-7d6a8e0f1b35",
+    "4a7d1e95-b2c8-4036-9f5a-8e3c0d6b1a72",
   ],
   "recipients": [
     {
@@ -147,10 +159,10 @@ ACCESS_NOTE = "Both the owner and employees can read it."
 OWNER_NOTE = "Owner only; employees get a 403."
 
 RFQ_NOTE = (
-  "An RFQ (request for quotation) is created automatically by the nightly low-stock "
-  "check when a product's stock falls to its reorder point and the reorder quantity "
-  "was calculated from dispatch history. It asks suppliers to quote for one product "
-  "and quantity. `auto_generated` is true when the system created it."
+  "An RFQ (request for quotation) asks suppliers to quote for one or more products "
+  "of the same supply category. It is created automatically by the nightly low-stock "
+  "check, or by the owner from the Active Alerts table. `auto_generated` is true "
+  "when the system created it."
 )
 
 STATUS_NOTE = (
@@ -160,10 +172,12 @@ STATUS_NOTE = (
 )
 
 CARD_NOTE = (
-  "`quantity` is the amount to order. `expected_delivery` is an estimate: the day "
-  "the RFQ was created plus the product's lead time in days. `category` is null if "
-  "the product has no category. `recipient_count` is the number of suppliers the RFQ "
-  "was sent to and `quoted_count` is how many of them have sent a quotation."
+  "`items` lists every product and quantity requested; `item_count` and "
+  "`total_quantity` summarise them. `supply_category` is the kind of supplier the "
+  "RFQ was sent to (null for RFQs created before supply categories existed). "
+  "`expected_delivery` is an estimate: the day the RFQ was created plus the longest "
+  "lead time among its products. `recipient_count` is the number of suppliers the "
+  "RFQ was sent to and `quoted_count` is how many of them have sent a quotation."
 )
 
 RECIPIENT_NOTE = (
@@ -224,7 +238,7 @@ rfq_detail_docs = extend_schema_view(
     operation_id="procurement_rfqs_retrieve",
     summary="Get RFQ",
     description=(
-      "Returns one RFQ with its product line and the list of suppliers it was sent "
+      "Returns one RFQ with its product lines and the list of suppliers it was sent "
       "to. " + ACCESS_NOTE + " " + STATUS_NOTE + " " + CARD_NOTE + " "
       + RECIPIENT_NOTE + " `reorder_suggestion_ids` lists the low-stock alerts this RFQ covers."
     ),
@@ -395,10 +409,12 @@ SUPPLIER_RFQ_LIST_ITEM_EXAMPLE = {
   "number": "RFQ-7568",
   "business_name": "Gupta Kirana",
   "business_city": "Delhi",
+  "supply_category": "Dairy",
   "deadline": "2026-10-14T12:30:00Z",
   "rfq_status": "open",
   "my_status": "sent",
-  "item_count": 1,
+  "item_count": 2,
+  "total_quantity": 140,
   "created_at": "2026-10-13T02:00:00Z",
 }
 
@@ -451,11 +467,11 @@ SUPPLIER_RFQ_DETAIL_EXAMPLE = {
   "notes": "",
   "items": [
     {"id": RFQ_ITEM_ID, "product_name": "Amul Dahi", "sku": "SKU-787328", "quantity": 70},
+    {
+      "id": "8c3e5a17-d204-4b69-93f1-6a0b7e2d9c45",
+      "product_name": "Amul Milk 1L", "sku": "SKU-202", "quantity": 70,
+    },
   ],
-  "category": "Dairy",
-  "product_name": "Amul Dahi",
-  "sku": "SKU-787328",
-  "required_quantity": 70,
   "expected_delivery": "2026-10-15",
   "can_quote": True,
   "my_quotation": None,
@@ -552,13 +568,13 @@ supplier_rfq_detail_docs = extend_schema_view(
     summary="Supplier: Get RFQ",
     description=(
       "Everything the Post Quotation screen needs. Header card: `number`, "
-      "`category`, `product_name`, `required_quantity`, `expected_delivery`, `sku`, "
-      "`deadline` (quote by) and `business_name` / `business_city`. `items` holds "
-      "the `id` to send as `rfq_item` when quoting. `can_quote` is false once the "
-      "RFQ is closed, cancelled, awarded or past its deadline. `my_quotation` is the "
-      "supplier's quotation, or null if they have not quoted. The first open "
-      "changes `my_status` from `sent` to `viewed`, which the owner sees. "
-      + SUPPLIER_NOTE
+      "`supply_category`, `item_count`, `total_quantity`, `expected_delivery`, "
+      "`deadline` (quote by) and `business_name` / `business_city`. `items` lists "
+      "every product the business wants, each with the `id` to send as `rfq_item` "
+      "when quoting. `can_quote` is false once the RFQ is closed, cancelled, "
+      "awarded or past its deadline. `my_quotation` is the supplier's quotation, "
+      "or null if they have not quoted. The first open changes `my_status` from "
+      "`sent` to `viewed`, which the owner sees. " + SUPPLIER_NOTE
     ),
     responses={
       200: resp(
@@ -909,25 +925,7 @@ reorder_alert_dismiss_docs = extend_schema_view(
   ),
 )
 
-MULTI_ITEM_RFQ_EXAMPLE = {
-  **RFQ_DETAIL_EXAMPLE,
-  "auto_generated": False,
-  "reorder_suggestion_ids": [
-    "9e1b5c72-0a3d-4f86-b2c4-7d6a8e0f1b35",
-    "4a7d1e95-b2c8-4036-9f5a-8e3c0d6b1a72",
-  ],
-  "items": [
-    *RFQ_DETAIL_EXAMPLE["items"],
-    {
-      "id": "8c3e5a17-d204-4b69-93f1-6a0b7e2d9c45",
-      "product": "a1b2c3d4-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
-      "product_name": "Amul Dahi",
-      "sku": "SKU-787328",
-      "category": "Dairy",
-      "quantity": 70,
-    },
-  ],
-}
+MULTI_ITEM_RFQ_EXAMPLE = {**RFQ_DETAIL_EXAMPLE, "auto_generated": False}
 
 reorder_alert_bulk_create_rfq_docs = extend_schema_view(
   post=extend_schema(

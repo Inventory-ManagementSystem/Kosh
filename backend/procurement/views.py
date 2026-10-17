@@ -81,7 +81,10 @@ def paginated_response(request, queryset, serializer_class, message):
 def rfq_queryset(business):
   return (
     RFQ.objects.filter(business=business)
-    .prefetch_related("items__product__category", "recipients__supplier_profile", "reorder_suggestions")
+    .select_related("supply_category")
+    .prefetch_related(
+      "items__product__category", "recipients__supplier_profile", "reorder_suggestions"
+    )
   )
 
 @rfq_list_docs
@@ -219,9 +222,8 @@ class ReorderAlertRefreshApi(APIView):
 def supplier_rfq_queryset(supplier):
   return (
     RFQRecipient.objects.filter(supplier_profile=supplier)
-    .select_related("product__category", "rfq")
-    .select_related("rfq__business", "quotation")
-    .prefetch_related("rfq__items__product__category", "quotation__items__rfq_item")
+    .select_related("rfq__business", "rfq__supply_category", "quotation")
+    .prefetch_related("rfq__items__product", "quotation__items__rfq_item")
     .order_by("-created_at")
   )
 
