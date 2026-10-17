@@ -97,6 +97,14 @@ class Product(models.Model):
     related_name="products"
   )
 
+  supply_category = models.ForeignKey(
+    "suppliers.SupplyCategory",
+    on_delete=models.SET_NULL,
+    null=True,
+    blank=True,
+    related_name="products",
+  )
+
   name = models.CharField(max_length=255)
   image = models.ImageField(
     upload_to="products/",

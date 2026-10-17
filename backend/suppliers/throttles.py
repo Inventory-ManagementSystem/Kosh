@@ -3,7 +3,7 @@ from rest_framework.permissions import SAFE_METHODS
 
 class SupplierRegistrationThrottle(UserRateThrottle):
   scope = "supplier_register"
-  rate = "5/hour"
+  rate = "10/hour"
 
 class OwnerSupplierThrottle(UserRateThrottle):
   scope = "owner_supplier"
