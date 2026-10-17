@@ -15,6 +15,9 @@ from accounts.permissions import HasBusinessAccess, IsOwner
 from accounts.responses import error_response, success_response, validation_error_response
 from accounts.swagger import UNAUTHORIZED_RESPONSE, ok_example, resp
 from suppliers.permissions import IsSupplier
+from django.db import transaction
+from notifications.models import Notification
+from notifications.services import notify_many
 
 from .SwaggerDocs import (
   reorder_alert_list_docs,
@@ -27,6 +30,9 @@ from .SwaggerDocs import (
   rfq_detail_docs,
   rfq_list_docs,
   rfq_summary_docs,
+  reorder_alert_create_rfq_docs,
+  reorder_alert_dismiss_docs,
+  reorder_alert_bulk_create_rfq_docs,
 )
 
 from .models import RFQ, Quotation, RFQRecipient, ReorderSuggestion
@@ -40,6 +46,8 @@ from .serializers import (
   ReorderAlertSerializer,
   SupplierRFQInboxDetailSerializer,
   SupplierRFQListSerializer,
+  BulkRFQCreateSerializer, 
+  RFQCreateSerializer,
 )
 from .services import (
   QuotationError,
@@ -49,6 +57,15 @@ from .services import (
   submit_quotation,
   withdraw_quotation,
 )
+
+from .rfq_services import (
+  RFQCreationError,
+  create_rfq_for_suggestion,
+  create_rfqs_for_suggestions,
+)
+
+from .serializers import RFQCreateSerializer
+
 from .throttles import QuotationWriteThrottle
 
 def paginated_response(request, queryset, serializer_class, message):
@@ -62,7 +79,7 @@ def paginated_response(request, queryset, serializer_class, message):
 def rfq_queryset(business):
   return (
     RFQ.objects.filter(business=business)
-    .prefetch_related("items__product__category", "recipients__supplier_profile")
+    .prefetch_related("items__product__category", "recipients__supplier_profile", "reorder_suggestions")
   )
 
 @rfq_list_docs
@@ -123,8 +140,31 @@ class RFQCancelApi(APIView):
         },
         status=400,
       )
-    rfq.status = RFQ.Status.CANCELLED
-    rfq.save(update_fields=["status", "updated_at"])
+
+    with transaction.atomic():
+      rfq.status = RFQ.Status.CANCELLED
+      rfq.save(update_fields=["status", "updated_at"])
+
+      ReorderSuggestion.objects.filter(
+        rfq=rfq, status=ReorderSuggestion.Status.RFQ_CREATED
+      ).update(
+        status=ReorderSuggestion.Status.OPEN,
+        rfq=None,
+        updated_at=timezone.now(),
+      )
+
+      recipients = rfq.recipients.select_related("supplier_profile__user").exclude(
+        status=RFQRecipient.Status.DECLINED
+      )
+      notify_many(
+        [r.supplier_profile.user for r in recipients],
+        f"RFQ {rfq.number} was cancelled",
+        f"{request.business.business_name} cancelled this request. "
+        "You don't need to send a quotation.",
+        kind=Notification.Kind.RFQ,
+        push=False,
+      )
+
     return Response({"success": True, "message": "RFQ cancelled.", "data": None})
 
 @rfq_summary_docs
@@ -165,6 +205,7 @@ class ReorderAlertListApi(APIView):
 def supplier_rfq_queryset(supplier):
   return (
     RFQRecipient.objects.filter(supplier_profile=supplier)
+    .select_related("product__category", "rfq")
     .select_related("rfq__business", "quotation")
     .prefetch_related("rfq__items__product__category", "quotation__items__rfq_item")
     .order_by("-created_at")
@@ -298,4 +339,79 @@ class RFQQuotationListApi(APIView):
     )
     return success_response(
       "Quotations fetched.", OwnerQuotationSerializer(quotations, many=True).data
-    )  
+    )
+
+@reorder_alert_create_rfq_docs
+class ReorderAlertCreateRFQApi(APIView):
+  permission_classes = [HasBusinessAccess, IsOwner]
+
+  def post(self, request, pk):
+    suggestion = get_object_or_404(ReorderSuggestion, pk=pk, business=request.business)
+    serializer = RFQCreateSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    try:
+      rfq = create_rfq_for_suggestion(
+        suggestion,
+        quantity=serializer.validated_data.get("quantity"),
+        include_platform_pool=serializer.validated_data["include_platform_pool"],
+        created_by=request.user,
+      )
+    except RFQCreationError as exc:
+      return Response(
+        {"success": False, "message": exc.message, "code": exc.code, "errors": None, "details": None},
+        status=409 if exc.code == "SUGGESTION_NOT_OPEN" else 400,
+      )
+    rfq = rfq_queryset(request.business).get(pk=rfq.pk)
+    return Response(
+      {"success": True, "message": "RFQ created.", "data": RFQDetailSerializer(rfq).data},
+      status=201,
+    )
+
+BULK_RFQ_ERROR_STATUS = {"ALERT_NOT_FOUND": 404, "SUGGESTION_NOT_OPEN": 409}
+
+
+@reorder_alert_bulk_create_rfq_docs
+class ReorderAlertBulkCreateRFQApi(APIView):
+  permission_classes = [HasBusinessAccess, IsOwner]
+
+  def post(self, request):
+    serializer = BulkRFQCreateSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    data = serializer.validated_data
+    try:
+      rfqs = create_rfqs_for_suggestions(
+        request.business,
+        [(a["id"], a.get("quantity")) for a in data["alerts"]],
+        include_platform_pool=data["include_platform_pool"],
+        created_by=request.user,
+      )
+    except RFQCreationError as exc:
+      return error_response(
+        exc.message, exc.code, status=BULK_RFQ_ERROR_STATUS.get(exc.code, 400)
+      )
+    qs = rfq_queryset(request.business).filter(pk__in=[r.pk for r in rfqs]).order_by("number")
+    return success_response(
+      "RFQs created.", RFQDetailSerializer(qs, many=True).data,
+      status=status.HTTP_201_CREATED,
+    )
+
+@reorder_alert_dismiss_docs
+class ReorderAlertDismissApi(APIView):
+  permission_classes = [HasBusinessAccess, IsOwner]
+
+  def post(self, request, pk):
+    suggestion = get_object_or_404(ReorderSuggestion, pk=pk, business=request.business)
+    if suggestion.status != ReorderSuggestion.Status.OPEN:
+      return Response(
+        {
+          "success": False,
+          "message": "Only an alert without an RFQ can be dismissed.",
+          "code": "SUGGESTION_NOT_OPEN",
+          "errors": None,
+          "details": None,
+        },
+        status=409,
+      )
+    suggestion.status = ReorderSuggestion.Status.CLOSED
+    suggestion.save(update_fields=["status", "updated_at"])
+    return Response({"success": True, "message": "Alert dismissed.", "data": None})

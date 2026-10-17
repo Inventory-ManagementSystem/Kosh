@@ -96,13 +96,15 @@ class RFQListSerializer(serializers.ModelSerializer):
 class RFQDetailSerializer(RFQListSerializer):
   items = RFQItemSerializer(many=True, read_only=True)
   recipients = RFQRecipientSerializer(many=True, read_only=True)
-  reorder_suggestion_id = serializers.UUIDField(read_only=True)
+  reorder_suggestion_ids = serializers.SerializerMethodField()
 
   class Meta(RFQListSerializer.Meta):
     fields = RFQListSerializer.Meta.fields + [
-      "notes", "reorder_suggestion_id", "items", "recipients", "updated_at",
+      "notes", "reorder_suggestion_ids", "items", "recipients", "updated_at",
     ]
     read_only_fields = fields
+  def get_reorder_suggestion_ids(self, obj):
+    return [s.id for s in obj.reorder_suggestions.all()]
 
 
 class RFQUpdateSerializer(serializers.ModelSerializer):
@@ -128,12 +130,14 @@ class ReorderAlertSerializer(serializers.ModelSerializer):
   category = serializers.SerializerMethodField()
   required_stock = serializers.IntegerField(source="suggested_quantity", read_only=True)
   stock_status = serializers.CharField(source="product.status", read_only=True)  # "Low Stock" / "Out of Stock"
+  rfq_id = serializers.UUIDField(read_only=True)
+
 
   class Meta:
     model = ReorderSuggestion
     fields = [
       "id", "product_id", "product_name", "sku", "category",
-      "required_stock", "stock_status", "status", "created_at",
+      "required_stock", "stock_status", "method", "status", "rfq_id", "created_at",
     ]
     read_only_fields = fields
 
@@ -371,3 +375,24 @@ class SupplierRFQInboxDetailSerializer(SupplierRFQDetailSerializer):
       return None
     quotation.rfq = obj.rfq 
     return QuotationSerializer(quotation).data
+
+class RFQCreateSerializer(serializers.Serializer):
+  quantity = serializers.IntegerField(required=False, min_value=1, max_value=1_000_000)
+  include_platform_pool = serializers.BooleanField(required=False, default=False)
+
+class AlertSelectionSerializer(serializers.Serializer):
+  id = serializers.UUIDField()
+  quantity = serializers.IntegerField(required=False, min_value=1, max_value=1_000_000)
+
+
+class BulkRFQCreateSerializer(serializers.Serializer):
+  alerts = AlertSelectionSerializer(many=True, allow_empty=False)
+  include_platform_pool = serializers.BooleanField(required=False, default=False)
+
+  def validate_alerts(self, alerts):
+    if len(alerts) > 50:
+      raise serializers.ValidationError("You can select at most 50 alerts at a time.")
+    ids = [a["id"] for a in alerts]
+    if len(ids) != len(set(ids)):
+      raise serializers.ValidationError("Each alert can be selected only once.")
+    return alerts

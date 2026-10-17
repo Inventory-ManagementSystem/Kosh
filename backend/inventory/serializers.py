@@ -3,6 +3,7 @@ from .models import (
     Category, Product, Warehouse, DispatchItem, DispatchNote, Outlet, StockMovement,
 )
 from django.utils import timezone
+from suppliers.models import SupplyCategory
 
 QUANTITY_ERROR = "Stock can't be set here. Use the adjust-stock endpoint."
 
@@ -53,6 +54,16 @@ class ProductSerializer(serializers.ModelSerializer):
         read_only=True,
         default=None,
     )
+    supply_category = serializers.PrimaryKeyRelatedField(
+        queryset=SupplyCategory.objects.filter(is_active=True),
+        required=False,
+        allow_null=True,
+    )
+    supply_category_name = serializers.CharField(
+        source="supply_category.name",
+        read_only=True,
+        default=None,
+    )
     warehouse_name = serializers.CharField(
         source="warehouse.name",
         read_only=True,
@@ -79,6 +90,8 @@ class ProductSerializer(serializers.ModelSerializer):
             "description",
             "category",
             "category_name",
+            "supply_category",
+            "supply_category_name",
             "warehouse",
             "warehouse_name",
             "price",

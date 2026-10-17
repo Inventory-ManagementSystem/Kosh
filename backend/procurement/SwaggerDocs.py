@@ -14,7 +14,7 @@ from accounts.swagger import (
   UNAUTHORIZED_RESPONSE,
 )
 
-from .serializers import QuotationSubmitSerializer, RFQUpdateSerializer
+from .serializers import QuotationSubmitSerializer, RFQUpdateSerializer, RFQCreateSerializer, RFQUpdateSerializer, BulkRFQCreateSerializer
 
 
 RFQ_LIST_ITEM_EXAMPLE = {
@@ -37,7 +37,7 @@ RFQ_LIST_ITEM_EXAMPLE = {
 RFQ_DETAIL_EXAMPLE = {
   **RFQ_LIST_ITEM_EXAMPLE,
   "notes": "",
-  "reorder_suggestion_id": "9e1b5c72-0a3d-4f86-b2c4-7d6a8e0f1b35",
+  "reorder_suggestion_ids": ["9e1b5c72-0a3d-4f86-b2c4-7d6a8e0f1b35"],
   "items": [
     {
       "id": "1f4a9d63-8c2e-47b0-a5d7-3e9b0c6a2f18",
@@ -81,10 +81,18 @@ ALERT_EXAMPLE = {
   "category": "Dairy",
   "required_stock": 30,
   "stock_status": "Low Stock",
+  "method": "manual",
   "status": "open",
+  "rfq_id": None,
   "created_at": "2026-10-13T02:00:00Z",
 }
 
+ALERT_WITH_RFQ_EXAMPLE = {
+  **ALERT_EXAMPLE,
+  "method": "formula",
+  "status": "rfq_created",
+  "rfq_id": "c3d8a2f1-6b47-4e09-9a15-2f7e1b8d4c60",
+}
 
 def paginated(*results):
   return {
@@ -218,8 +226,7 @@ rfq_detail_docs = extend_schema_view(
     description=(
       "Returns one RFQ with its product line and the list of suppliers it was sent "
       "to. " + ACCESS_NOTE + " " + STATUS_NOTE + " " + CARD_NOTE + " "
-      + RECIPIENT_NOTE + " `reorder_suggestion_id` is the low-stock alert that "
-      "caused the RFQ."
+      + RECIPIENT_NOTE + " `reorder_suggestion_ids` lists the low-stock alerts this RFQ covers."
     ),
     responses={
       200: resp(
@@ -286,8 +293,13 @@ rfq_cancel_docs = extend_schema_view(
     description=(
       "Cancels an RFQ so suppliers can no longer send quotations. Only an RFQ whose "
       "status is `open` can be cancelled; an awarded, closed or already cancelled "
-      "RFQ returns a 400. No request body is needed. A cancelled RFQ cannot be "
-      "reopened. " + OWNER_NOTE
+      "RFQ returns a 400. The RFQ stays in the list with status `cancelled`, so the "
+      "history is kept. If it was created from a low-stock alert, the alert goes "
+      "back to `open`, so the owner can create a new RFQ from it. For a product with "
+      "enough dispatch history, the nightly check creates a new RFQ automatically "
+      "unless the alert is dismissed. Suppliers who had not declined get an in-app "
+      "notification. No request body is needed. A cancelled RFQ cannot be reopened. "
+      + OWNER_NOTE
     ),
     request=None,
     responses={
@@ -346,14 +358,19 @@ reorder_alert_list_docs = extend_schema_view(
       "paginated. This feeds the Active Alerts table. An alert is created by the "
       "nightly low-stock check and stays active until it is closed. `required_stock` "
       "is the suggested quantity to order. `stock_status` is the product's current "
-      "stock state: `In Stock`, `Low Stock` or `Out of Stock`. `status` is `open` "
-      "when no RFQ has been created yet and `rfq_created` once one has. " + ACCESS_NOTE
+      "stock state: `In Stock`, `Low Stock` or `Out of Stock`. `method` is "
+      "`formula` when the product has enough dispatch history, in which case an RFQ "
+      "is created automatically, and `manual` when it does not, in which case the "
+      "owner decides with the Create RFQ action. `status` is `open` when no RFQ has "
+      "been created yet and `rfq_created` once one has; `rfq_id` is then the id of "
+      "that RFQ, otherwise null. " + ACCESS_NOTE
     ),
     parameters=PAGE_PARAMETERS,
     responses={
       200: resp(
         "Paginated alert list.",
-        ok_example("Alerts", "Alerts fetched.", data=paginated(ALERT_EXAMPLE)),
+        ok_example("Manual Alert", "Alerts fetched.", data=paginated(ALERT_EXAMPLE)),
+        ok_example("Alert With RFQ", "Alerts fetched.", data=paginated(ALERT_WITH_RFQ_EXAMPLE)),
         ok_example("No Alerts", "Alerts fetched.", data=paginated()),
       ),
       401: UNAUTHORIZED_RESPONSE,
@@ -362,6 +379,7 @@ reorder_alert_list_docs = extend_schema_view(
         "The page number is out of range.",
         err_example("Invalid Page", "Invalid page.", "NOT_FOUND"),
       ),
+      429: THROTTLED_RESPONSE,
     },
   ),
 )
@@ -767,6 +785,225 @@ rfq_quotation_list_docs = extend_schema_view(
       401: UNAUTHORIZED_RESPONSE,
       403: FORBIDDEN_RESPONSE,
       404: NOT_FOUND_RESPONSE,
+    },
+  ),
+)
+
+
+ALERT_NOT_FOUND_RESPONSE = resp(
+  "No such alert in this business. An alert that belongs to another business "
+  "also returns this.",
+  err_example("Not Found", "No ReorderSuggestion matches the given query.", "NOT_FOUND"),
+)
+
+ALERT_NOT_OPEN_EXAMPLE_TEXT = "The alert for Amul Milk 1L already has an RFQ or is closed."
+
+
+reorder_alert_create_rfq_docs = extend_schema_view(
+  post=extend_schema(
+    operation_id="procurement_alerts_create_rfq",
+    summary="Create RFQ From Alert",
+    description=(
+      "Creates an RFQ for the product of an open alert and sends it to the "
+      "business's own suppliers. This is how the owner approves an alert whose "
+      "`method` is `manual`; alerts with `formula` get their RFQ automatically. "
+      "The product must have a supply category. The RFQ is sent to the business’s own suppliers that are active, "
+      "linked to a supplier account, verified by an admin and registered for that supply category."
+      "are skipped. All recipients get an in-app and push notification. The "
+      "deadline is 3 days from now, `auto_generated` is false, and the alert "
+      "becomes `rfq_created`. `quantity` is optional; when left out, the alert's "
+      "`required_stock` is used. Set `include_platform_pool` to true to also send "
+      "the RFQ to verified suppliers in the business's city (matched on the "
+      "product's supply category); the default is false. Returns the full "
+      "RFQ. " + OWNER_NOTE + " Accepts JSON; the body may be empty."
+    ),
+    request=RFQCreateSerializer,
+    examples=[
+      OpenApiExample("Use Suggested Quantity", value={}, request_only=True),
+      OpenApiExample("Change Quantity", value={"quantity": 50}, request_only=True),
+      OpenApiExample(
+        "Include Platform Pool",
+        value={"quantity": 50, "include_platform_pool": True},
+        request_only=True,
+      ),
+    ],
+    responses={
+      201: resp(
+        "RFQ created.",
+        ok_example(
+          "Created", "RFQ created.",
+          data={**RFQ_DETAIL_EXAMPLE, "auto_generated": False},
+        ),
+      ),
+      400: resp(
+        "Validation error, or there is nobody to send the RFQ to.",
+        err_example(
+          "Quantity Too Low", "Validation failed.", "VALIDATION_ERROR",
+          errors={"quantity": ["Ensure this value is greater than or equal to 1."]},
+        ),
+        err_example(
+          "Quantity Too High", "Validation failed.", "VALIDATION_ERROR",
+          errors={"quantity": ["Ensure this value is less than or equal to 1000000."]},
+        ),
+        err_example(
+          "Invalid Quantity", "Validation failed.", "VALIDATION_ERROR",
+          errors={"quantity": ["A valid integer is required."]},
+        ),
+        err_example(
+          "Invalid Platform Pool", "Validation failed.", "VALIDATION_ERROR",
+          errors={"include_platform_pool": ["Must be a valid boolean."]},
+        ),
+        err_example(
+          "No Suppliers",
+          "No verified suppliers found for Dairy.",
+          "NO_SUPPLIERS",
+        ),
+        err_example(
+          "No Supply Category",
+          "Set a supply category on Amul Milk 1L so we know which suppliers to ask.",
+          "NO_SUPPLY_CATEGORY",
+        ),
+      ),
+      401: UNAUTHORIZED_RESPONSE,
+      403: OWNER_ONLY_RESPONSE,
+      404: ALERT_NOT_FOUND_RESPONSE,
+      409: resp(
+        "The alert already has an RFQ, or it was dismissed.",
+        err_example(
+          "Alert Not Open", ALERT_NOT_OPEN_EXAMPLE_TEXT, "SUGGESTION_NOT_OPEN"
+        ),
+      ),
+      429: THROTTLED_RESPONSE,
+    },
+  ),
+)
+
+reorder_alert_dismiss_docs = extend_schema_view(
+  post=extend_schema(
+    operation_id="procurement_alerts_dismiss",
+    summary="Dismiss Alert",
+    description=(
+      "Closes an alert the owner does not want to act on, so it leaves the Active "
+      "Alerts list and stops counting as active. Only an alert with status `open` "
+      "can be dismissed; one that already has an RFQ cannot, so delete or cancel "
+      "the RFQ first. No request body is needed. A dismissed alert is not "
+      "permanent: if the product is still low on stock, the nightly check creates "
+      "a new alert for it. " + OWNER_NOTE
+    ),
+    request=None,
+    responses={
+      200: resp("Alert dismissed.", ok_example("Dismissed", "Alert dismissed.")),
+      401: UNAUTHORIZED_RESPONSE,
+      403: OWNER_ONLY_RESPONSE,
+      404: ALERT_NOT_FOUND_RESPONSE,
+      409: resp(
+        "The alert already has an RFQ, or it is already dismissed.",
+        err_example(
+          "Alert Not Open",
+          "Only an alert without an RFQ can be dismissed.",
+          "SUGGESTION_NOT_OPEN",
+        ),
+      ),
+      429: THROTTLED_RESPONSE,
+    },
+  ),
+)
+
+MULTI_ITEM_RFQ_EXAMPLE = {
+  **RFQ_DETAIL_EXAMPLE,
+  "auto_generated": False,
+  "reorder_suggestion_ids": [
+    "9e1b5c72-0a3d-4f86-b2c4-7d6a8e0f1b35",
+    "4a7d1e95-b2c8-4036-9f5a-8e3c0d6b1a72",
+  ],
+  "items": [
+    *RFQ_DETAIL_EXAMPLE["items"],
+    {
+      "id": "8c3e5a17-d204-4b69-93f1-6a0b7e2d9c45",
+      "product": "a1b2c3d4-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+      "product_name": "Amul Dahi",
+      "sku": "SKU-787328",
+      "category": "Dairy",
+      "quantity": 70,
+    },
+  ],
+}
+
+reorder_alert_bulk_create_rfq_docs = extend_schema_view(
+  post=extend_schema(
+    operation_id="procurement_alerts_bulk_create_rfq",
+    summary="Create RFQs From Several Alerts",
+    description=(
+      "Creates RFQs for several open alerts at once. The alerts are grouped by the "
+      "product's supply category and one RFQ is created per category, so alerts in "
+      "the same category share one RFQ with several items. Each RFQ goes only to "
+      "verified suppliers who sell that category: the business's own suppliers (any "
+      "location) and, if `include_platform_pool` is true, platform suppliers in the "
+      "business's city. Every product must have a supply category. All or nothing: if "
+      "any selected alert cannot be used, no RFQ is created. `alerts` holds 1 to 50 "
+      "entries; each has the alert `id` and an optional `quantity` (defaults to the "
+      "alert's `required_stock`). Returns a list with one RFQ per category. "
+      "Each alert becomes `rfq_created`. The deadline is 3 days from now. "
+      + OWNER_NOTE + " Accepts JSON."
+    ),
+    request=BulkRFQCreateSerializer,
+    examples=[
+      OpenApiExample(
+        "Two Alerts",
+        value={"alerts": [
+          {"id": "9e1b5c72-0a3d-4f86-b2c4-7d6a8e0f1b35"},
+          {"id": "4a7d1e95-b2c8-4036-9f5a-8e3c0d6b1a72", "quantity": 50},
+        ]},
+        request_only=True,
+      ),
+      OpenApiExample(
+        "Include Platform Pool",
+        value={
+          "alerts": [{"id": "9e1b5c72-0a3d-4f86-b2c4-7d6a8e0f1b35"}],
+          "include_platform_pool": True,
+        },
+        request_only=True,
+      ),
+    ],
+    responses={
+      201: resp(
+        "RFQs created.",
+        ok_example("Created", "RFQs created.", data=[MULTI_ITEM_RFQ_EXAMPLE]),
+      ),
+      400: resp(
+        "Validation error, an alert cannot be used, or there is nobody to send to.",
+        err_example("No Alerts", "Validation failed.", "VALIDATION_ERROR",
+          errors={"alerts": ["This list may not be empty."]}),
+        err_example("Duplicate Alert", "Validation failed.", "VALIDATION_ERROR",
+          errors={"alerts": ["Each alert can be selected only once."]}),
+        err_example("Too Many Alerts", "Validation failed.", "VALIDATION_ERROR",
+          errors={"alerts": ["You can select at most 50 alerts at a time."]}),
+        err_example("Invalid Alert Id", "Validation failed.", "VALIDATION_ERROR",
+          errors={"alerts": [{"id": ["Must be a valid UUID."]}]}),
+        err_example("Invalid Quantity", "Validation failed.", "VALIDATION_ERROR",
+          errors={"alerts": [{"quantity": ["Ensure this value is greater than or equal to 1."]}]}),
+        err_example(
+          "No Supply Category",
+          "Set a supply category on Amul Milk 1L so we know which suppliers to ask.",
+          "NO_SUPPLY_CATEGORY",
+        ),
+        err_example(
+          "No Suppliers", "No verified suppliers found for Dairy.", "NO_SUPPLIERS",
+        ),
+      ),
+      401: UNAUTHORIZED_RESPONSE,
+      403: OWNER_ONLY_RESPONSE,
+      404: resp(
+        "A selected alert does not exist in this business.",
+        err_example(
+          "Alert Not Found", "One or more selected alerts were not found.", "ALERT_NOT_FOUND",
+        ),
+      ),
+      409: resp(
+        "A selected alert already has an RFQ, or it was dismissed.",
+        err_example("Alert Not Open", ALERT_NOT_OPEN_EXAMPLE_TEXT, "SUGGESTION_NOT_OPEN"),
+      ),
+      429: THROTTLED_RESPONSE,
     },
   ),
 )
