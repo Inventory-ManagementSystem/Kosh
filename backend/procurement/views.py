@@ -211,7 +211,7 @@ class ReorderAlertRefreshApi(APIView):
   permission_classes = [HasBusinessAccess, IsOwner]
 
   def post(self, request):
-    created = create_alerts_for_business(request.business)
+    created = create_alerts_for_business(request.business, notify=False)
     active = ReorderSuggestion.objects.filter(
       business=request.business, status__in=ReorderSuggestion.ACTIVE
     ).count()
