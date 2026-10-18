@@ -402,6 +402,7 @@ reorder_alert_list_docs = extend_schema_view(
 
 INVITATION_ID = "e5b93d40-1c7a-4f68-a2d9-6b0e8c4f7a13"
 RFQ_ITEM_ID = "1f4a9d63-8c2e-47b0-a5d7-3e9b0c6a2f18"
+RFQ_ITEM_ID_2 = "8c3e5a17-d204-4b69-93f1-6a0b7e2d9c45"
 
 SUPPLIER_RFQ_LIST_ITEM_EXAMPLE = {
   "id": INVITATION_ID,
@@ -435,13 +436,27 @@ QUOTATION_EXAMPLE = {
       "line_subtotal": "2940.00",
       "line_tax": "147.00",
       "line_total": "3087.00",
-    }
+    },
+    {
+      "id": "c5d9a2e7-4b18-4f63-9e0a-7d2c1b8f3a56",
+      "rfq_item_id": RFQ_ITEM_ID_2,
+      "product_name": "Amul Milk 1L",
+      "sku": "SKU-202",
+      "requested_quantity": 70,
+      "quantity": 70,
+      "unit_price": "30.00",
+      "gst_rate": "5.00",
+      "line_subtotal": "2100.00",
+      "line_tax": "105.00",
+      "line_total": "2205.00",
+    },
   ],
-  "subtotal": "2940.00",
-  "tax_total": "147.00",
-  "grand_total": "3087.00",
+
+  "subtotal": "5040.00",
+  "tax_total": "252.00",
+  "grand_total": "5292.00",
   "advance_amount": "1000.00",
-  "balance_amount": "2087.00",
+  "balance_amount": "4292.00",
   "delivery_date": "2026-10-15",
   "expected_delivery": "2026-10-15",
   "is_late": False,
@@ -484,6 +499,15 @@ OWNER_QUOTATION_EXAMPLE = {
   "city": "Ghaziabad",
   "supplier_verified": True,
   "source": "own",
+  "rank": 1,
+  "score": 97.8,
+  "badges": ["recommended", "cheapest", "fastest"],
+  "breakdown": {
+    "price": {"score": 100.0, "weight": 58.8},
+    "delivery": {"score": 100.0, "weight": 29.4},
+    "payment": {"score": 81.1, "weight": 11.8},
+    "reliability": {"score": None, "weight": 0.0},
+  },
 }
 
 NOT_SUPPLIER_RESPONSE = resp(
@@ -517,6 +541,8 @@ WINDOW_NOTE = (
 )
 
 QUOTATION_FIELDS_NOTE = (
+  "A quotation must cover every item on the RFQ at the full requested quantity; "
+  "there are no partial quotes. "
   "Totals are calculated by the server: `subtotal` = sum of unit price x quantity, "
   "`tax_total` = GST on each line, `grand_total` = subtotal + tax, "
   "`balance_amount` = grand total - advance (due on delivery). "
@@ -623,7 +649,11 @@ supplier_quotation_docs = extend_schema_view(
       "whole quotation. The first call returns 201 and later calls return 200 with "
       "`revision` increased. Posting again after a withdraw or decline works too. "
       + WINDOW_NOTE + "\n\n"
-      "- `items`: one entry per RFQ item quoted. `rfq_item` is the item `id` from "
+      "- `items`: one entry for EVERY item on the RFQ, always at the full requested "
+      "quantity (no partial quotes). `rfq_item` is the item `id` from Supplier: Get "
+      "RFQ. `unit_price` is per unit, excluding GST, at least 0.01. `gst_rate` is a "
+      "percentage from 0 to 40 (default 0). `quantity` is not needed; if you send it, "
+      "it must equal the requested quantity.\n"
       "Supplier: Get RFQ. `unit_price` is per unit, excluding GST, at least 0.01. "
       "`gst_rate` is a percentage from 0 to 40 (default 0). `quantity` is optional, "
       "defaults to the requested quantity and cannot be more than it.\n"
@@ -641,7 +671,10 @@ supplier_quotation_docs = extend_schema_view(
       OpenApiExample(
         "Post Quotation",
         value={
-          "items": [{"rfq_item": RFQ_ITEM_ID, "unit_price": "42.00", "gst_rate": "5"}],
+          "items": [
+            {"rfq_item": RFQ_ITEM_ID, "unit_price": "42.00", "gst_rate": "5"},
+            {"rfq_item": RFQ_ITEM_ID_2, "unit_price": "30.00", "gst_rate": "5"},
+          ],
           "advance_amount": "1000.00",
           "delivery_date": "2026-10-15",
           "notes": "Price includes transport within Delhi.",
@@ -649,11 +682,12 @@ supplier_quotation_docs = extend_schema_view(
         request_only=True,
       ),
       OpenApiExample(
-        "Partial Quantity, No Advance",
+        "No Advance",
         value={
-          "items": [{
-            "rfq_item": RFQ_ITEM_ID, "unit_price": "40.50", "gst_rate": "5", "quantity": 50,
-          }],
+          "items": [
+            {"rfq_item": RFQ_ITEM_ID, "unit_price": "40.50", "gst_rate": "5"},
+            {"rfq_item": RFQ_ITEM_ID_2, "unit_price": "29.00", "gst_rate": "12"},
+          ],
           "delivery_date": "2026-10-16",
         },
         request_only=True,
@@ -677,8 +711,11 @@ supplier_quotation_docs = extend_schema_view(
         err_example("Missing Price", "Validation failed.", "VALIDATION_ERROR", errors={
           "items": [{"unit_price": ["This field is required."]}],
         }),
-        err_example("Too Many Units", "Validation failed.", "VALIDATION_ERROR", errors={
-          "items": ["You can quote at most 70 units of Amul Dahi."],
+        err_example("Partial Quantity", "Validation failed.", "VALIDATION_ERROR", errors={
+          "items": ["Quote the full quantity: 70 units of Amul Dahi."],
+        }),
+        err_example("Missing Item", "Validation failed.", "VALIDATION_ERROR", errors={
+          "items": ["Quote every product on this RFQ. Missing: Amul Milk 1L."],
         }),
         err_example("Wrong Item", "Validation failed.", "VALIDATION_ERROR", errors={
           "items": [f"Item {RFQ_ITEM_ID} is not part of this RFQ."],
@@ -690,7 +727,7 @@ supplier_quotation_docs = extend_schema_view(
           "items": [{"gst_rate": ["Ensure this value is less than or equal to 40."]}],
         }),
         err_example("Advance Too High", "Validation failed.", "VALIDATION_ERROR", errors={
-          "advance_amount": ["Advance payment cannot exceed the total amount (₹3087.00)."],
+          "advance_amount": ["Advance payment cannot exceed the total amount (₹5292.00)."],
         }),
         err_example("Past Delivery Date", "Validation failed.", "VALIDATION_ERROR", errors={
           "delivery_date": ["Delivery date cannot be in the past."],
@@ -767,20 +804,63 @@ supplier_rfq_decline_docs = extend_schema_view(
   ),
 )
 
+RANKING_NOTE = (
+  "Quotations come back ranked, best first, with a `score` from 0 to 100 and a "
+  "`rank`. The score blends four parameters, each compared with the other quotations "
+  "on this RFQ: `price` (grand total; the lowest scores 100), `delivery` (days from "
+  "the RFQ's creation to the quoted delivery date; the earliest scores 100), "
+  "`payment` (a smaller advance scores higher; no advance is 100) and `reliability` "
+  "(the supplier's delivery record; it is left out while nobody has any history). "
+  "Default weights are price 50, delivery 25, payment 10 and reliability 15. A "
+  "parameter that can't be scored is skipped and its weight is shared among the "
+  "others. `breakdown` shows each parameter's score and its effective weight in "
+  "percent. `badges` can include `recommended` (rank 1), `cheapest` and `fastest`. "
+  "Scores are calculated on every call and change when quotations are added, "
+  "revised or withdrawn. The ranking is only a suggestion; the owner decides."
+)
+
 rfq_quotation_list_docs = extend_schema_view(
   get=extend_schema(
     operation_id="procurement_rfqs_quotations_list",
     summary="List Quotations for RFQ",
     description=(
-      "Every quotation received on this RFQ, cheapest first (by `grand_total`, then "
-      "earliest `submitted_at`), so the first entry is the lowest bid. Withdrawn "
+      "Every quotation received on this RFQ, ranked by score, best first. Withdrawn "
       "quotations are left out. Not paginated. `source` is `own` for the owner's own "
-      "supplier and `platform` for the platform pool. " + QUOTATION_FIELDS_NOTE
-      + " " + ACCESS_NOTE
+      "supplier and `platform` for the platform pool. " + RANKING_NOTE + " "
+      + QUOTATION_FIELDS_NOTE + " " + ACCESS_NOTE
     ),
+    parameters=[
+      OpenApiParameter(
+        "weight_price", OpenApiTypes.FLOAT, OpenApiParameter.QUERY,
+        description=(
+          "Optional. Priority of price, 0 to 1000. Weights are relative, so 70/30 "
+          "and 7/3 mean the same. If you send any weight, the ones you leave out "
+          "count as 0; if you send none, the defaults are used."
+        ),
+      ),
+      OpenApiParameter(
+        "weight_delivery", OpenApiTypes.FLOAT, OpenApiParameter.QUERY,
+        description="Optional. Priority of delivery date, 0 to 1000.",
+      ),
+      OpenApiParameter(
+        "weight_payment", OpenApiTypes.FLOAT, OpenApiParameter.QUERY,
+        description="Optional. Priority of payment terms (small advance), 0 to 1000.",
+      ),
+      OpenApiParameter(
+        "weight_reliability", OpenApiTypes.FLOAT, OpenApiParameter.QUERY,
+        description="Optional. Priority of supplier reliability, 0 to 1000.",
+      ),
+      OpenApiParameter(
+        "sort", OpenApiTypes.STR, OpenApiParameter.QUERY,
+        description=(
+          "Optional. `rank` (default) or `price` (cheapest first). Only the order "
+          "of the list changes; `rank` and `score` stay the same."
+        ),
+      ),
+    ],
     responses={
       200: resp(
-        "Quotations, cheapest first.",
+        "Quotations, best first.",
         ok_example("Quotations", "Quotations fetched.", data=[
           OWNER_QUOTATION_EXAMPLE,
           {
@@ -789,14 +869,39 @@ rfq_quotation_list_docs = extend_schema_view(
             "company_name": "Gupta Wholesale",
             "city": "Delhi",
             "source": "platform",
-            "subtotal": "3080.00",
-            "tax_total": "154.00",
-            "grand_total": "3234.00",
+            "subtotal": "5180.00",
+            "tax_total": "259.00",
+            "grand_total": "5439.00",
             "advance_amount": "0.00",
-            "balance_amount": "3234.00",
+            "balance_amount": "5439.00",
+            "delivery_date": "2026-10-16",
+            "is_late": True,
+            "late_by_days": 1,
+            "rank": 2,
+            "score": 88.6,
+            "badges": [],
+            "breakdown": {
+              "price": {"score": 97.3, "weight": 58.8},
+              "delivery": {"score": 66.7, "weight": 29.4},
+              "payment": {"score": 100.0, "weight": 11.8},
+              "reliability": {"score": None, "weight": 0.0},
+            },
           },
         ]),
         ok_example("No Quotations Yet", "Quotations fetched.", data=[]),
+      ),
+      400: resp(
+        "A weight is invalid.",
+        err_example(
+          "Invalid Weight",
+          "weight_price must be a number from 0 to 1000.",
+          "INVALID_WEIGHTS",
+        ),
+        err_example(
+          "No Usable Weight",
+          "Give at least one scorable parameter a weight above 0.",
+          "INVALID_WEIGHTS",
+        ),
       ),
       401: UNAUTHORIZED_RESPONSE,
       403: FORBIDDEN_RESPONSE,

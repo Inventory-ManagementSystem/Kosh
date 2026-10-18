@@ -57,9 +57,13 @@ def close_expired_rfqs():
   )
 
 
-def _open_rfqs_with_deadline_between(start, end):
+def _hour_start():
+  return timezone.now().astimezone(events.IST).replace(minute=0, second=0, microsecond=0)
+
+
+def _rfqs_with_deadline_between(start, end, statuses):
   return (
-    RFQ.objects.filter(status=RFQ.Status.OPEN, deadline__gt=start, deadline__lte=end)
+    RFQ.objects.filter(status__in=statuses, deadline__gt=start, deadline__lte=end)
     .select_related("business__owner")
     .prefetch_related("items")
   )
@@ -67,10 +71,10 @@ def _open_rfqs_with_deadline_between(start, end):
 
 @shared_task
 def send_rfq_deadline_reminders():
-  now = timezone.now()
+  now = _hour_start()
   start = now + timedelta(hours=REMINDER_HOURS - 1)
   end = now + timedelta(hours=REMINDER_HOURS)
-  rfqs = list(_open_rfqs_with_deadline_between(start, end))
+  rfqs = list(_rfqs_with_deadline_between(start, end, [RFQ.Status.OPEN]))
   for rfq in rfqs:
     events.rfq_deadline_reminder(rfq, REMINDER_HOURS)
   return len(rfqs)
@@ -78,8 +82,10 @@ def send_rfq_deadline_reminders():
 
 @shared_task
 def notify_rfq_deadlines_passed():
-  now = timezone.now()
-  rfqs = list(_open_rfqs_with_deadline_between(now - timedelta(hours=1), now))
+  now = _hour_start()
+  rfqs = list(_rfqs_with_deadline_between(
+    now - timedelta(hours=1), now, [RFQ.Status.OPEN, RFQ.Status.CLOSED]
+  ))
   for rfq in rfqs:
     events.rfq_quotes_ready(rfq)
   return len(rfqs)
