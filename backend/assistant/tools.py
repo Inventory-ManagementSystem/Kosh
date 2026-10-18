@@ -611,10 +611,36 @@ TOOL_DECLARATIONS = [
 ]
 
 
-def execute_tool(name, args, business):
+
+OWNER_ONLY_TOOLS = {"get_rfq_quotations"}
+
+PRICE_FIELDS = {
+  "price", "cost_price", "unit_price", "gst_rate",
+  "subtotal", "tax_total", "grand_total", "advance_amount", "line_total",
+  "stock_value_at_selling_price", "stock_value_at_cost", "products_without_cost_price",
+}
+
+
+def declarations_for(is_owner):
+  if is_owner:
+    return TOOL_DECLARATIONS
+  return [d for d in TOOL_DECLARATIONS if d["name"] not in OWNER_ONLY_TOOLS]
+
+
+def redact_prices(data):
+  if isinstance(data, dict):
+    return {k: redact_prices(v) for k, v in data.items() if k not in PRICE_FIELDS}
+  if isinstance(data, list):
+    return [redact_prices(item) for item in data]
+  return data
+
+
+def execute_tool(name, args, business, is_owner=True):
   func = TOOL_FUNCTIONS.get(name)
   if func is None:
     return {"error": f"Unknown tool '{name}'."}
+  if not is_owner and name in OWNER_ONLY_TOOLS:
+    return {"error": "Only the business owner can see quotations, prices and costs."}
   args = dict(args or {})
   try:
     inspect.signature(func).bind(business, **args)
@@ -624,4 +650,5 @@ def execute_tool(name, args, business):
     result = func(business, **args)
   except ToolError as exc:
     return {"error": str(exc)}
-  return to_json_safe(result)
+  result = to_json_safe(result)
+  return result if is_owner else redact_prices(result)

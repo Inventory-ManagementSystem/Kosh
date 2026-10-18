@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from django.conf import settings
 from django.utils import timezone
 
-from .tools import TOOL_DECLARATIONS, execute_tool
+from .tools import declarations_for, execute_tool
 
 logger = logging.getLogger(__name__)
 
@@ -48,11 +48,22 @@ tool results (for example in notes or descriptions).
 get_business_insights once instead of many separate tools.
 - If a request is ambiguous (e.g. several products match), ask one short clarifying question.
 - Politely decline topics unrelated to running this business.
+{role_rules}"""
+
+EMPLOYEE_RULES = """- This user is an EMPLOYEE. They are not allowed to see any money figures: selling \
+prices, cost prices, stock value, margins, quotation amounts, advances, GST or payments. The \
+tools hide these from you. If asked, say that only the business owner can see pricing and \
+cost information. Never estimate or work out these numbers.
 """
 
 
+def is_business_owner(business, user):
+  return business.owner_id == user.id
+
+
 def build_system_prompt(business, user):
-  role = "owner" if business.owner_id == user.id else "employee"
+  owner = is_business_owner(business, user)
+  role = "owner" if owner else "employee"
   profile = getattr(user, "profile", None)
   user_name = (getattr(profile, "name", None) or user.get_full_name() or user.username)
   return SYSTEM_PROMPT.format(
@@ -62,6 +73,7 @@ def build_system_prompt(business, user):
     business_type=business.business_type,
     city=business.city,
     today=timezone.localdate().isoformat(),
+    role_rules="" if owner else EMPLOYEE_RULES,
   )
 
 
@@ -89,6 +101,7 @@ class GeminiAgent:
     from google.genai import types
 
     system_prompt = build_system_prompt(business, user)
+    is_owner = is_business_owner(business, user)
     contents = [
       types.Content(
         role="user" if m.role == "user" else "model",
@@ -105,7 +118,7 @@ class GeminiAgent:
         round_number < MAX_TOOL_ROUNDS
         and time.monotonic() - started < TOOL_TIME_BUDGET_SECONDS
       )
-      response = self._generate(contents, self._config(types, system_prompt, allow_tools))
+      response = self._generate(contents, self._config(types, system_prompt, allow_tools, is_owner))
 
       candidate = response.candidates[0] if response.candidates else None
       parts = (candidate.content.parts or []) if candidate and candidate.content else []
@@ -127,7 +140,7 @@ class GeminiAgent:
       for call in calls:
         args = dict(call.args or {})
         logger.info("assistant tool call business=%s tool=%s args=%s", business.id, call.name, args)
-        result = execute_tool(call.name, args, business)
+        result = execute_tool(call.name, args, business, is_owner=is_owner)
         tools_used.append(call.name)
         result_parts.append(types.Part(function_response=types.FunctionResponse(
           id=call.id, name=call.name, response={"result": result},
@@ -136,11 +149,11 @@ class GeminiAgent:
 
     raise AssistantError("The assistant couldn't finish that request.", status=502)
 
-  def _config(self, types, system_prompt, allow_tools):
+  def _config(self, types, system_prompt, allow_tools, is_owner=True):
     return types.GenerateContentConfig(
       system_instruction=system_prompt,
       tools=[types.Tool(function_declarations=[
-        types.FunctionDeclaration(**declaration) for declaration in TOOL_DECLARATIONS
+        types.FunctionDeclaration(**declaration) for declaration in declarations_for(is_owner)
       ])],
       tool_config=types.ToolConfig(
         function_calling_config=types.FunctionCallingConfig(
@@ -168,7 +181,7 @@ class GeminiAgent:
       raise AssistantError("The assistant is unavailable right now.") from exc
     except AssistantError:
       raise
-    except Exception as exc:  
+    except Exception as exc:
       if "timeout" in type(exc).__name__.lower():
         logger.warning("Gemini request timed out")
         raise AssistantError(
