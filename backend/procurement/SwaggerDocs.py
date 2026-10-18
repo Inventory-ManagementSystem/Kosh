@@ -14,8 +14,27 @@ from accounts.swagger import (
   UNAUTHORIZED_RESPONSE,
 )
 
-from .serializers import QuotationSubmitSerializer, RFQUpdateSerializer
+from .serializers import QuotationSubmitSerializer, RFQUpdateSerializer, RFQCreateSerializer, RFQUpdateSerializer, BulkRFQCreateSerializer
 
+
+RFQ_ITEMS_EXAMPLE = [
+  {
+    "id": "1f4a9d63-8c2e-47b0-a5d7-3e9b0c6a2f18",
+    "product": "5d0c7e91-4b3a-4a28-8f16-c2e9a7b1d054",
+    "product_name": "Amul Dahi",
+    "sku": "SKU-787328",
+    "category": "Dairy",
+    "quantity": 70,
+  },
+  {
+    "id": "8c3e5a17-d204-4b69-93f1-6a0b7e2d9c45",
+    "product": "a1b2c3d4-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+    "product_name": "Amul Milk 1L",
+    "sku": "SKU-202",
+    "category": "Dairy",
+    "quantity": 70,
+  },
+]
 
 RFQ_LIST_ITEM_EXAMPLE = {
   "id": "c3d8a2f1-6b47-4e09-9a15-2f7e1b8d4c60",
@@ -24,10 +43,10 @@ RFQ_LIST_ITEM_EXAMPLE = {
   "deadline": "2026-10-16T18:30:00Z",
   "include_platform_pool": False,
   "auto_generated": True,
-  "product_name": "Amul Milk 1L",
-  "sku": "SKU-202",
-  "category": "Dairy",
-  "quantity": 70,
+  "supply_category": "Dairy",
+  "item_count": 2,
+  "total_quantity": 140,
+  "items": RFQ_ITEMS_EXAMPLE,
   "expected_delivery": "2026-10-20",
   "recipient_count": 3,
   "quoted_count": 1,
@@ -37,16 +56,9 @@ RFQ_LIST_ITEM_EXAMPLE = {
 RFQ_DETAIL_EXAMPLE = {
   **RFQ_LIST_ITEM_EXAMPLE,
   "notes": "",
-  "reorder_suggestion_id": "9e1b5c72-0a3d-4f86-b2c4-7d6a8e0f1b35",
-  "items": [
-    {
-      "id": "1f4a9d63-8c2e-47b0-a5d7-3e9b0c6a2f18",
-      "product": "5d0c7e91-4b3a-4a28-8f16-c2e9a7b1d054",
-      "product_name": "Amul Milk 1L",
-      "sku": "SKU-202",
-      "category": "Dairy",
-      "quantity": 70,
-    }
+  "reorder_suggestion_ids": [
+    "9e1b5c72-0a3d-4f86-b2c4-7d6a8e0f1b35",
+    "4a7d1e95-b2c8-4036-9f5a-8e3c0d6b1a72",
   ],
   "recipients": [
     {
@@ -81,10 +93,18 @@ ALERT_EXAMPLE = {
   "category": "Dairy",
   "required_stock": 30,
   "stock_status": "Low Stock",
+  "method": "manual",
   "status": "open",
+  "rfq_id": None,
   "created_at": "2026-10-13T02:00:00Z",
 }
 
+ALERT_WITH_RFQ_EXAMPLE = {
+  **ALERT_EXAMPLE,
+  "method": "formula",
+  "status": "rfq_created",
+  "rfq_id": "c3d8a2f1-6b47-4e09-9a15-2f7e1b8d4c60",
+}
 
 def paginated(*results):
   return {
@@ -139,10 +159,10 @@ ACCESS_NOTE = "Both the owner and employees can read it."
 OWNER_NOTE = "Owner only; employees get a 403."
 
 RFQ_NOTE = (
-  "An RFQ (request for quotation) is created automatically by the nightly low-stock "
-  "check when a product's stock falls to its reorder point and the reorder quantity "
-  "was calculated from dispatch history. It asks suppliers to quote for one product "
-  "and quantity. `auto_generated` is true when the system created it."
+  "An RFQ (request for quotation) asks suppliers to quote for one or more products "
+  "of the same supply category. It is created automatically by the nightly low-stock "
+  "check, or by the owner from the Active Alerts table. `auto_generated` is true "
+  "when the system created it."
 )
 
 STATUS_NOTE = (
@@ -152,10 +172,12 @@ STATUS_NOTE = (
 )
 
 CARD_NOTE = (
-  "`quantity` is the amount to order. `expected_delivery` is an estimate: the day "
-  "the RFQ was created plus the product's lead time in days. `category` is null if "
-  "the product has no category. `recipient_count` is the number of suppliers the RFQ "
-  "was sent to and `quoted_count` is how many of them have sent a quotation."
+  "`items` lists every product and quantity requested; `item_count` and "
+  "`total_quantity` summarise them. `supply_category` is the kind of supplier the "
+  "RFQ was sent to (null for RFQs created before supply categories existed). "
+  "`expected_delivery` is an estimate: the day the RFQ was created plus the longest "
+  "lead time among its products. `recipient_count` is the number of suppliers the "
+  "RFQ was sent to and `quoted_count` is how many of them have sent a quotation."
 )
 
 RECIPIENT_NOTE = (
@@ -216,10 +238,9 @@ rfq_detail_docs = extend_schema_view(
     operation_id="procurement_rfqs_retrieve",
     summary="Get RFQ",
     description=(
-      "Returns one RFQ with its product line and the list of suppliers it was sent "
+      "Returns one RFQ with its product lines and the list of suppliers it was sent "
       "to. " + ACCESS_NOTE + " " + STATUS_NOTE + " " + CARD_NOTE + " "
-      + RECIPIENT_NOTE + " `reorder_suggestion_id` is the low-stock alert that "
-      "caused the RFQ."
+      + RECIPIENT_NOTE + " `reorder_suggestion_ids` lists the low-stock alerts this RFQ covers."
     ),
     responses={
       200: resp(
@@ -286,8 +307,13 @@ rfq_cancel_docs = extend_schema_view(
     description=(
       "Cancels an RFQ so suppliers can no longer send quotations. Only an RFQ whose "
       "status is `open` can be cancelled; an awarded, closed or already cancelled "
-      "RFQ returns a 400. No request body is needed. A cancelled RFQ cannot be "
-      "reopened. " + OWNER_NOTE
+      "RFQ returns a 400. The RFQ stays in the list with status `cancelled`, so the "
+      "history is kept. If it was created from a low-stock alert, the alert goes "
+      "back to `open`, so the owner can create a new RFQ from it. For a product with "
+      "enough dispatch history, the nightly check creates a new RFQ automatically "
+      "unless the alert is dismissed. Suppliers who had not declined get an in-app "
+      "notification. No request body is needed. A cancelled RFQ cannot be reopened. "
+      + OWNER_NOTE
     ),
     request=None,
     responses={
@@ -346,14 +372,19 @@ reorder_alert_list_docs = extend_schema_view(
       "paginated. This feeds the Active Alerts table. An alert is created by the "
       "nightly low-stock check and stays active until it is closed. `required_stock` "
       "is the suggested quantity to order. `stock_status` is the product's current "
-      "stock state: `In Stock`, `Low Stock` or `Out of Stock`. `status` is `open` "
-      "when no RFQ has been created yet and `rfq_created` once one has. " + ACCESS_NOTE
+      "stock state: `In Stock`, `Low Stock` or `Out of Stock`. `method` is "
+      "`formula` when the product has enough dispatch history, in which case an RFQ "
+      "is created automatically, and `manual` when it does not, in which case the "
+      "owner decides with the Create RFQ action. `status` is `open` when no RFQ has "
+      "been created yet and `rfq_created` once one has; `rfq_id` is then the id of "
+      "that RFQ, otherwise null. " + ACCESS_NOTE
     ),
     parameters=PAGE_PARAMETERS,
     responses={
       200: resp(
         "Paginated alert list.",
-        ok_example("Alerts", "Alerts fetched.", data=paginated(ALERT_EXAMPLE)),
+        ok_example("Manual Alert", "Alerts fetched.", data=paginated(ALERT_EXAMPLE)),
+        ok_example("Alert With RFQ", "Alerts fetched.", data=paginated(ALERT_WITH_RFQ_EXAMPLE)),
         ok_example("No Alerts", "Alerts fetched.", data=paginated()),
       ),
       401: UNAUTHORIZED_RESPONSE,
@@ -362,6 +393,7 @@ reorder_alert_list_docs = extend_schema_view(
         "The page number is out of range.",
         err_example("Invalid Page", "Invalid page.", "NOT_FOUND"),
       ),
+      429: THROTTLED_RESPONSE,
     },
   ),
 )
@@ -370,6 +402,7 @@ reorder_alert_list_docs = extend_schema_view(
 
 INVITATION_ID = "e5b93d40-1c7a-4f68-a2d9-6b0e8c4f7a13"
 RFQ_ITEM_ID = "1f4a9d63-8c2e-47b0-a5d7-3e9b0c6a2f18"
+RFQ_ITEM_ID_2 = "8c3e5a17-d204-4b69-93f1-6a0b7e2d9c45"
 
 SUPPLIER_RFQ_LIST_ITEM_EXAMPLE = {
   "id": INVITATION_ID,
@@ -377,10 +410,12 @@ SUPPLIER_RFQ_LIST_ITEM_EXAMPLE = {
   "number": "RFQ-7568",
   "business_name": "Gupta Kirana",
   "business_city": "Delhi",
+  "supply_category": "Dairy",
   "deadline": "2026-10-14T12:30:00Z",
   "rfq_status": "open",
   "my_status": "sent",
-  "item_count": 1,
+  "item_count": 2,
+  "total_quantity": 140,
   "created_at": "2026-10-13T02:00:00Z",
 }
 
@@ -401,13 +436,27 @@ QUOTATION_EXAMPLE = {
       "line_subtotal": "2940.00",
       "line_tax": "147.00",
       "line_total": "3087.00",
-    }
+    },
+    {
+      "id": "c5d9a2e7-4b18-4f63-9e0a-7d2c1b8f3a56",
+      "rfq_item_id": RFQ_ITEM_ID_2,
+      "product_name": "Amul Milk 1L",
+      "sku": "SKU-202",
+      "requested_quantity": 70,
+      "quantity": 70,
+      "unit_price": "30.00",
+      "gst_rate": "5.00",
+      "line_subtotal": "2100.00",
+      "line_tax": "105.00",
+      "line_total": "2205.00",
+    },
   ],
-  "subtotal": "2940.00",
-  "tax_total": "147.00",
-  "grand_total": "3087.00",
+
+  "subtotal": "5040.00",
+  "tax_total": "252.00",
+  "grand_total": "5292.00",
   "advance_amount": "1000.00",
-  "balance_amount": "2087.00",
+  "balance_amount": "4292.00",
   "delivery_date": "2026-10-15",
   "expected_delivery": "2026-10-15",
   "is_late": False,
@@ -433,11 +482,11 @@ SUPPLIER_RFQ_DETAIL_EXAMPLE = {
   "notes": "",
   "items": [
     {"id": RFQ_ITEM_ID, "product_name": "Amul Dahi", "sku": "SKU-787328", "quantity": 70},
+    {
+      "id": "8c3e5a17-d204-4b69-93f1-6a0b7e2d9c45",
+      "product_name": "Amul Milk 1L", "sku": "SKU-202", "quantity": 70,
+    },
   ],
-  "category": "Dairy",
-  "product_name": "Amul Dahi",
-  "sku": "SKU-787328",
-  "required_quantity": 70,
   "expected_delivery": "2026-10-15",
   "can_quote": True,
   "my_quotation": None,
@@ -450,6 +499,15 @@ OWNER_QUOTATION_EXAMPLE = {
   "city": "Ghaziabad",
   "supplier_verified": True,
   "source": "own",
+  "rank": 1,
+  "score": 97.8,
+  "badges": ["recommended", "cheapest", "fastest"],
+  "breakdown": {
+    "price": {"score": 100.0, "weight": 58.8},
+    "delivery": {"score": 100.0, "weight": 29.4},
+    "payment": {"score": 81.1, "weight": 11.8},
+    "reliability": {"score": None, "weight": 0.0},
+  },
 }
 
 NOT_SUPPLIER_RESPONSE = resp(
@@ -483,6 +541,8 @@ WINDOW_NOTE = (
 )
 
 QUOTATION_FIELDS_NOTE = (
+  "A quotation must cover every item on the RFQ at the full requested quantity; "
+  "there are no partial quotes. "
   "Totals are calculated by the server: `subtotal` = sum of unit price x quantity, "
   "`tax_total` = GST on each line, `grand_total` = subtotal + tax, "
   "`balance_amount` = grand total - advance (due on delivery). "
@@ -534,13 +594,13 @@ supplier_rfq_detail_docs = extend_schema_view(
     summary="Supplier: Get RFQ",
     description=(
       "Everything the Post Quotation screen needs. Header card: `number`, "
-      "`category`, `product_name`, `required_quantity`, `expected_delivery`, `sku`, "
-      "`deadline` (quote by) and `business_name` / `business_city`. `items` holds "
-      "the `id` to send as `rfq_item` when quoting. `can_quote` is false once the "
-      "RFQ is closed, cancelled, awarded or past its deadline. `my_quotation` is the "
-      "supplier's quotation, or null if they have not quoted. The first open "
-      "changes `my_status` from `sent` to `viewed`, which the owner sees. "
-      + SUPPLIER_NOTE
+      "`supply_category`, `item_count`, `total_quantity`, `expected_delivery`, "
+      "`deadline` (quote by) and `business_name` / `business_city`. `items` lists "
+      "every product the business wants, each with the `id` to send as `rfq_item` "
+      "when quoting. `can_quote` is false once the RFQ is closed, cancelled, "
+      "awarded or past its deadline. `my_quotation` is the supplier's quotation, "
+      "or null if they have not quoted. The first open changes `my_status` from "
+      "`sent` to `viewed`, which the owner sees. " + SUPPLIER_NOTE
     ),
     responses={
       200: resp(
@@ -589,7 +649,11 @@ supplier_quotation_docs = extend_schema_view(
       "whole quotation. The first call returns 201 and later calls return 200 with "
       "`revision` increased. Posting again after a withdraw or decline works too. "
       + WINDOW_NOTE + "\n\n"
-      "- `items`: one entry per RFQ item quoted. `rfq_item` is the item `id` from "
+      "- `items`: one entry for EVERY item on the RFQ, always at the full requested "
+      "quantity (no partial quotes). `rfq_item` is the item `id` from Supplier: Get "
+      "RFQ. `unit_price` is per unit, excluding GST, at least 0.01. `gst_rate` is a "
+      "percentage from 0 to 40 (default 0). `quantity` is not needed; if you send it, "
+      "it must equal the requested quantity.\n"
       "Supplier: Get RFQ. `unit_price` is per unit, excluding GST, at least 0.01. "
       "`gst_rate` is a percentage from 0 to 40 (default 0). `quantity` is optional, "
       "defaults to the requested quantity and cannot be more than it.\n"
@@ -607,7 +671,10 @@ supplier_quotation_docs = extend_schema_view(
       OpenApiExample(
         "Post Quotation",
         value={
-          "items": [{"rfq_item": RFQ_ITEM_ID, "unit_price": "42.00", "gst_rate": "5"}],
+          "items": [
+            {"rfq_item": RFQ_ITEM_ID, "unit_price": "42.00", "gst_rate": "5"},
+            {"rfq_item": RFQ_ITEM_ID_2, "unit_price": "30.00", "gst_rate": "5"},
+          ],
           "advance_amount": "1000.00",
           "delivery_date": "2026-10-15",
           "notes": "Price includes transport within Delhi.",
@@ -615,11 +682,12 @@ supplier_quotation_docs = extend_schema_view(
         request_only=True,
       ),
       OpenApiExample(
-        "Partial Quantity, No Advance",
+        "No Advance",
         value={
-          "items": [{
-            "rfq_item": RFQ_ITEM_ID, "unit_price": "40.50", "gst_rate": "5", "quantity": 50,
-          }],
+          "items": [
+            {"rfq_item": RFQ_ITEM_ID, "unit_price": "40.50", "gst_rate": "5"},
+            {"rfq_item": RFQ_ITEM_ID_2, "unit_price": "29.00", "gst_rate": "12"},
+          ],
           "delivery_date": "2026-10-16",
         },
         request_only=True,
@@ -643,8 +711,11 @@ supplier_quotation_docs = extend_schema_view(
         err_example("Missing Price", "Validation failed.", "VALIDATION_ERROR", errors={
           "items": [{"unit_price": ["This field is required."]}],
         }),
-        err_example("Too Many Units", "Validation failed.", "VALIDATION_ERROR", errors={
-          "items": ["You can quote at most 70 units of Amul Dahi."],
+        err_example("Partial Quantity", "Validation failed.", "VALIDATION_ERROR", errors={
+          "items": ["Quote the full quantity: 70 units of Amul Dahi."],
+        }),
+        err_example("Missing Item", "Validation failed.", "VALIDATION_ERROR", errors={
+          "items": ["Quote every product on this RFQ. Missing: Amul Milk 1L."],
         }),
         err_example("Wrong Item", "Validation failed.", "VALIDATION_ERROR", errors={
           "items": [f"Item {RFQ_ITEM_ID} is not part of this RFQ."],
@@ -656,7 +727,7 @@ supplier_quotation_docs = extend_schema_view(
           "items": [{"gst_rate": ["Ensure this value is less than or equal to 40."]}],
         }),
         err_example("Advance Too High", "Validation failed.", "VALIDATION_ERROR", errors={
-          "advance_amount": ["Advance payment cannot exceed the total amount (₹3087.00)."],
+          "advance_amount": ["Advance payment cannot exceed the total amount (₹5292.00)."],
         }),
         err_example("Past Delivery Date", "Validation failed.", "VALIDATION_ERROR", errors={
           "delivery_date": ["Delivery date cannot be in the past."],
@@ -733,20 +804,63 @@ supplier_rfq_decline_docs = extend_schema_view(
   ),
 )
 
+RANKING_NOTE = (
+  "Quotations come back ranked, best first, with a `score` from 0 to 100 and a "
+  "`rank`. The score blends four parameters, each compared with the other quotations "
+  "on this RFQ: `price` (grand total; the lowest scores 100), `delivery` (days from "
+  "the RFQ's creation to the quoted delivery date; the earliest scores 100), "
+  "`payment` (a smaller advance scores higher; no advance is 100) and `reliability` "
+  "(the supplier's delivery record; it is left out while nobody has any history). "
+  "Default weights are price 50, delivery 25, payment 10 and reliability 15. A "
+  "parameter that can't be scored is skipped and its weight is shared among the "
+  "others. `breakdown` shows each parameter's score and its effective weight in "
+  "percent. `badges` can include `recommended` (rank 1), `cheapest` and `fastest`. "
+  "Scores are calculated on every call and change when quotations are added, "
+  "revised or withdrawn. The ranking is only a suggestion; the owner decides."
+)
+
 rfq_quotation_list_docs = extend_schema_view(
   get=extend_schema(
     operation_id="procurement_rfqs_quotations_list",
     summary="List Quotations for RFQ",
     description=(
-      "Every quotation received on this RFQ, cheapest first (by `grand_total`, then "
-      "earliest `submitted_at`), so the first entry is the lowest bid. Withdrawn "
+      "Every quotation received on this RFQ, ranked by score, best first. Withdrawn "
       "quotations are left out. Not paginated. `source` is `own` for the owner's own "
-      "supplier and `platform` for the platform pool. " + QUOTATION_FIELDS_NOTE
-      + " " + ACCESS_NOTE
+      "supplier and `platform` for the platform pool. " + RANKING_NOTE + " "
+      + QUOTATION_FIELDS_NOTE + " " + ACCESS_NOTE
     ),
+    parameters=[
+      OpenApiParameter(
+        "weight_price", OpenApiTypes.FLOAT, OpenApiParameter.QUERY,
+        description=(
+          "Optional. Priority of price, 0 to 1000. Weights are relative, so 70/30 "
+          "and 7/3 mean the same. If you send any weight, the ones you leave out "
+          "count as 0; if you send none, the defaults are used."
+        ),
+      ),
+      OpenApiParameter(
+        "weight_delivery", OpenApiTypes.FLOAT, OpenApiParameter.QUERY,
+        description="Optional. Priority of delivery date, 0 to 1000.",
+      ),
+      OpenApiParameter(
+        "weight_payment", OpenApiTypes.FLOAT, OpenApiParameter.QUERY,
+        description="Optional. Priority of payment terms (small advance), 0 to 1000.",
+      ),
+      OpenApiParameter(
+        "weight_reliability", OpenApiTypes.FLOAT, OpenApiParameter.QUERY,
+        description="Optional. Priority of supplier reliability, 0 to 1000.",
+      ),
+      OpenApiParameter(
+        "sort", OpenApiTypes.STR, OpenApiParameter.QUERY,
+        description=(
+          "Optional. `rank` (default) or `price` (cheapest first). Only the order "
+          "of the list changes; `rank` and `score` stay the same."
+        ),
+      ),
+    ],
     responses={
       200: resp(
-        "Quotations, cheapest first.",
+        "Quotations, best first.",
         ok_example("Quotations", "Quotations fetched.", data=[
           OWNER_QUOTATION_EXAMPLE,
           {
@@ -755,18 +869,276 @@ rfq_quotation_list_docs = extend_schema_view(
             "company_name": "Gupta Wholesale",
             "city": "Delhi",
             "source": "platform",
-            "subtotal": "3080.00",
-            "tax_total": "154.00",
-            "grand_total": "3234.00",
+            "subtotal": "5180.00",
+            "tax_total": "259.00",
+            "grand_total": "5439.00",
             "advance_amount": "0.00",
-            "balance_amount": "3234.00",
+            "balance_amount": "5439.00",
+            "delivery_date": "2026-10-16",
+            "is_late": True,
+            "late_by_days": 1,
+            "rank": 2,
+            "score": 88.6,
+            "badges": [],
+            "breakdown": {
+              "price": {"score": 97.3, "weight": 58.8},
+              "delivery": {"score": 66.7, "weight": 29.4},
+              "payment": {"score": 100.0, "weight": 11.8},
+              "reliability": {"score": None, "weight": 0.0},
+            },
           },
         ]),
         ok_example("No Quotations Yet", "Quotations fetched.", data=[]),
       ),
+      400: resp(
+        "A weight is invalid.",
+        err_example(
+          "Invalid Weight",
+          "weight_price must be a number from 0 to 1000.",
+          "INVALID_WEIGHTS",
+        ),
+        err_example(
+          "No Usable Weight",
+          "Give at least one scorable parameter a weight above 0.",
+          "INVALID_WEIGHTS",
+        ),
+      ),
       401: UNAUTHORIZED_RESPONSE,
       403: FORBIDDEN_RESPONSE,
       404: NOT_FOUND_RESPONSE,
+    },
+  ),
+)
+
+
+ALERT_NOT_FOUND_RESPONSE = resp(
+  "No such alert in this business. An alert that belongs to another business "
+  "also returns this.",
+  err_example("Not Found", "No ReorderSuggestion matches the given query.", "NOT_FOUND"),
+)
+
+ALERT_NOT_OPEN_EXAMPLE_TEXT = "The alert for Amul Milk 1L already has an RFQ or is closed."
+
+
+reorder_alert_create_rfq_docs = extend_schema_view(
+  post=extend_schema(
+    operation_id="procurement_alerts_create_rfq",
+    summary="Create RFQ From Alert",
+    description=(
+      "Creates an RFQ for the product of an open alert and sends it to the "
+      "business's own suppliers. This is how the owner approves an alert whose "
+      "`method` is `manual`; alerts with `formula` get their RFQ automatically. "
+      "The product must have a supply category. The RFQ is sent to the business’s own suppliers that are active, "
+      "linked to a supplier account, verified by an admin and registered for that supply category."
+      "are skipped. All recipients get an in-app and push notification. The "
+      "deadline is 3 days from now, `auto_generated` is false, and the alert "
+      "becomes `rfq_created`. `quantity` is optional; when left out, the alert's "
+      "`required_stock` is used. Set `include_platform_pool` to true to also send "
+      "the RFQ to verified suppliers in the business's city (matched on the "
+      "product's supply category); the default is false. Returns the full "
+      "RFQ. " + OWNER_NOTE + " Accepts JSON; the body may be empty."
+    ),
+    request=RFQCreateSerializer,
+    examples=[
+      OpenApiExample("Use Suggested Quantity", value={}, request_only=True),
+      OpenApiExample("Change Quantity", value={"quantity": 50}, request_only=True),
+      OpenApiExample(
+        "Include Platform Pool",
+        value={"quantity": 50, "include_platform_pool": True},
+        request_only=True,
+      ),
+    ],
+    responses={
+      201: resp(
+        "RFQ created.",
+        ok_example(
+          "Created", "RFQ created.",
+          data={**RFQ_DETAIL_EXAMPLE, "auto_generated": False},
+        ),
+      ),
+      400: resp(
+        "Validation error, or there is nobody to send the RFQ to.",
+        err_example(
+          "Quantity Too Low", "Validation failed.", "VALIDATION_ERROR",
+          errors={"quantity": ["Ensure this value is greater than or equal to 1."]},
+        ),
+        err_example(
+          "Quantity Too High", "Validation failed.", "VALIDATION_ERROR",
+          errors={"quantity": ["Ensure this value is less than or equal to 1000000."]},
+        ),
+        err_example(
+          "Invalid Quantity", "Validation failed.", "VALIDATION_ERROR",
+          errors={"quantity": ["A valid integer is required."]},
+        ),
+        err_example(
+          "Invalid Platform Pool", "Validation failed.", "VALIDATION_ERROR",
+          errors={"include_platform_pool": ["Must be a valid boolean."]},
+        ),
+        err_example(
+          "No Suppliers",
+          "No verified suppliers found for Dairy.",
+          "NO_SUPPLIERS",
+        ),
+        err_example(
+          "No Supply Category",
+          "Set a supply category on Amul Milk 1L so we know which suppliers to ask.",
+          "NO_SUPPLY_CATEGORY",
+        ),
+      ),
+      401: UNAUTHORIZED_RESPONSE,
+      403: OWNER_ONLY_RESPONSE,
+      404: ALERT_NOT_FOUND_RESPONSE,
+      409: resp(
+        "The alert already has an RFQ, or it was dismissed.",
+        err_example(
+          "Alert Not Open", ALERT_NOT_OPEN_EXAMPLE_TEXT, "SUGGESTION_NOT_OPEN"
+        ),
+      ),
+      429: THROTTLED_RESPONSE,
+    },
+  ),
+)
+
+reorder_alert_dismiss_docs = extend_schema_view(
+  post=extend_schema(
+    operation_id="procurement_alerts_dismiss",
+    summary="Dismiss Alert",
+    description=(
+      "Closes an alert the owner does not want to act on, so it leaves the Active "
+      "Alerts list and stops counting as active. Only an alert with status `open` "
+      "can be dismissed; one that already has an RFQ cannot, so delete or cancel "
+      "the RFQ first. No request body is needed. A dismissed alert is not "
+      "permanent: if the product is still low on stock, the nightly check creates "
+      "a new alert for it. " + OWNER_NOTE
+    ),
+    request=None,
+    responses={
+      200: resp("Alert dismissed.", ok_example("Dismissed", "Alert dismissed.")),
+      401: UNAUTHORIZED_RESPONSE,
+      403: OWNER_ONLY_RESPONSE,
+      404: ALERT_NOT_FOUND_RESPONSE,
+      409: resp(
+        "The alert already has an RFQ, or it is already dismissed.",
+        err_example(
+          "Alert Not Open",
+          "Only an alert without an RFQ can be dismissed.",
+          "SUGGESTION_NOT_OPEN",
+        ),
+      ),
+      429: THROTTLED_RESPONSE,
+    },
+  ),
+)
+
+MULTI_ITEM_RFQ_EXAMPLE = {**RFQ_DETAIL_EXAMPLE, "auto_generated": False}
+
+reorder_alert_bulk_create_rfq_docs = extend_schema_view(
+  post=extend_schema(
+    operation_id="procurement_alerts_bulk_create_rfq",
+    summary="Create RFQs From Several Alerts",
+    description=(
+      "Creates RFQs for several open alerts at once. The alerts are grouped by the "
+      "product's supply category and one RFQ is created per category, so alerts in "
+      "the same category share one RFQ with several items. Each RFQ goes only to "
+      "verified suppliers who sell that category: the business's own suppliers (any "
+      "location) and, if `include_platform_pool` is true, platform suppliers in the "
+      "business's city. Every product must have a supply category. All or nothing: if "
+      "any selected alert cannot be used, no RFQ is created. `alerts` holds 1 to 50 "
+      "entries; each has the alert `id` and an optional `quantity` (defaults to the "
+      "alert's `required_stock`). Returns a list with one RFQ per category. "
+      "Each alert becomes `rfq_created`. The deadline is 3 days from now. "
+      + OWNER_NOTE + " Accepts JSON."
+    ),
+    request=BulkRFQCreateSerializer,
+    examples=[
+      OpenApiExample(
+        "Two Alerts",
+        value={"alerts": [
+          {"id": "9e1b5c72-0a3d-4f86-b2c4-7d6a8e0f1b35"},
+          {"id": "4a7d1e95-b2c8-4036-9f5a-8e3c0d6b1a72", "quantity": 50},
+        ]},
+        request_only=True,
+      ),
+      OpenApiExample(
+        "Include Platform Pool",
+        value={
+          "alerts": [{"id": "9e1b5c72-0a3d-4f86-b2c4-7d6a8e0f1b35"}],
+          "include_platform_pool": True,
+        },
+        request_only=True,
+      ),
+    ],
+    responses={
+      201: resp(
+        "RFQs created.",
+        ok_example("Created", "RFQs created.", data=[MULTI_ITEM_RFQ_EXAMPLE]),
+      ),
+      400: resp(
+        "Validation error, an alert cannot be used, or there is nobody to send to.",
+        err_example("No Alerts", "Validation failed.", "VALIDATION_ERROR",
+          errors={"alerts": ["This list may not be empty."]}),
+        err_example("Duplicate Alert", "Validation failed.", "VALIDATION_ERROR",
+          errors={"alerts": ["Each alert can be selected only once."]}),
+        err_example("Too Many Alerts", "Validation failed.", "VALIDATION_ERROR",
+          errors={"alerts": ["You can select at most 50 alerts at a time."]}),
+        err_example("Invalid Alert Id", "Validation failed.", "VALIDATION_ERROR",
+          errors={"alerts": [{"id": ["Must be a valid UUID."]}]}),
+        err_example("Invalid Quantity", "Validation failed.", "VALIDATION_ERROR",
+          errors={"alerts": [{"quantity": ["Ensure this value is greater than or equal to 1."]}]}),
+        err_example(
+          "No Supply Category",
+          "Set a supply category on Amul Milk 1L so we know which suppliers to ask.",
+          "NO_SUPPLY_CATEGORY",
+        ),
+        err_example(
+          "No Suppliers", "No verified suppliers found for Dairy.", "NO_SUPPLIERS",
+        ),
+      ),
+      401: UNAUTHORIZED_RESPONSE,
+      403: OWNER_ONLY_RESPONSE,
+      404: resp(
+        "A selected alert does not exist in this business.",
+        err_example(
+          "Alert Not Found", "One or more selected alerts were not found.", "ALERT_NOT_FOUND",
+        ),
+      ),
+      409: resp(
+        "A selected alert already has an RFQ, or it was dismissed.",
+        err_example("Alert Not Open", ALERT_NOT_OPEN_EXAMPLE_TEXT, "SUGGESTION_NOT_OPEN"),
+      ),
+      429: THROTTLED_RESPONSE,
+    },
+  ),
+)
+
+reorder_alert_refresh_docs = extend_schema_view(
+  post=extend_schema(
+    operation_id="procurement_alerts_refresh",
+    summary="Refresh Alerts",
+    description=(
+      "Runs the low-stock check for the logged-in user's business right now, "
+      "instead of waiting for the nightly check. A new alert is created for every "
+      "active product that has reached its reorder point and has no active alert "
+      "yet. Existing alerts are left alone, so calling it again is safe. It does not "
+      "create any RFQ. `created` is how many new alerts this call made and "
+      "`active_alerts` is the total number of active alerts afterwards. "
+      "No request body is needed. " + OWNER_NOTE
+    ),
+    request=None,
+    responses={
+      200: resp(
+        "Alerts refreshed.",
+        ok_example(
+          "New Alerts", "Alerts refreshed.",
+          data={"created": 3, "active_alerts": 5},
+        ),
+        ok_example(
+          "Nothing New", "Alerts refreshed.",
+          data={"created": 0, "active_alerts": 5},
+        ),
+      ),
+      401: UNAUTHORIZED_RESPONSE,
+      403: OWNER_ONLY_RESPONSE,
     },
   ),
 )

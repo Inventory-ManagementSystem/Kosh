@@ -59,6 +59,7 @@ class ProductListCreateApi(APIView):
     products = (
     Product.objects.filter(business=request.business).select_related(
       "category",
+      "supply_category",
       "warehouse",
       )
     )
@@ -128,6 +129,7 @@ class ProductDetailApi(APIView):
     return get_object_or_404(
       Product.objects.select_related(
         "category",
+        "supply_category",
         "warehouse",
       ),
       pk=pk,

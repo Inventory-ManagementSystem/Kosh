@@ -13,4 +13,9 @@ urlpatterns = [
   path("supplier/rfqs/<uuid:pk>/", views.SupplierRFQDetailApi.as_view(), name="supplier-rfq-detail"),
   path("supplier/rfqs/<uuid:pk>/quotation/", views.SupplierQuotationApi.as_view(), name="supplier-quotation"),
   path("supplier/rfqs/<uuid:pk>/decline/", views.SupplierRFQDeclineApi.as_view(), name="supplier-rfq-decline"),
+  path("alerts/<uuid:pk>/create-rfq/", views.ReorderAlertCreateRFQApi.as_view(), name="reorder-alert-create-rfq"),
+  path("alerts/create-rfq/", views.ReorderAlertBulkCreateRFQApi.as_view(), name="reorder-alert-bulk-create-rfq"),
+  path("alerts/<uuid:pk>/dismiss/", views.ReorderAlertDismissApi.as_view(), name="reorder-alert-dismiss"),
+  path("alerts/refresh/", views.ReorderAlertRefreshApi.as_view(), name="reorder-alert-refresh"),
+
 ]

@@ -24,6 +24,10 @@ class ReorderSuggestion(models.Model):
   product = models.ForeignKey(
     "inventory.Product", on_delete=models.CASCADE, related_name="reorder_suggestions"
   )
+  rfq = models.ForeignKey(
+    "RFQ", on_delete=models.SET_NULL, null=True, blank=True,
+    related_name="reorder_suggestions",
+  )
   status = models.CharField(max_length=20, choices=Status.choices, default=Status.OPEN)
   method = models.CharField(max_length=10)
   stock_at_creation = models.PositiveIntegerField()
@@ -56,12 +60,16 @@ class RFQ(models.Model):
     "accounts.Business", on_delete=models.CASCADE, related_name="rfqs"
   )
   number = models.CharField(max_length=20)
-  reorder_suggestion = models.OneToOneField(
-    ReorderSuggestion, on_delete=models.SET_NULL, null=True, blank=True,
-    related_name="rfq",
-  )
+
   status = models.CharField(max_length=10, choices=Status.choices, default=Status.OPEN)
   include_platform_pool = models.BooleanField(default=False)
+  supply_category = models.ForeignKey(
+    "suppliers.SupplyCategory",
+    on_delete=models.SET_NULL,
+    null=True,
+    blank=True,
+    related_name="rfqs",
+  )
   deadline = models.DateTimeField()
   notes = models.TextField(blank=True, default="")
   created_by = models.ForeignKey(

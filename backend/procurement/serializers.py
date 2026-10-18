@@ -39,10 +39,10 @@ class RFQRecipientSerializer(serializers.ModelSerializer):
 
 
 class RFQListSerializer(serializers.ModelSerializer):
-  product_name = serializers.SerializerMethodField()
-  sku = serializers.SerializerMethodField()
-  category = serializers.SerializerMethodField()
-  quantity = serializers.SerializerMethodField()  # quantity to order ("Stock size" on the card)
+  supply_category = serializers.SerializerMethodField()
+  items = RFQItemSerializer(many=True, read_only=True)
+  item_count = serializers.SerializerMethodField()
+  total_quantity = serializers.SerializerMethodField()
   expected_delivery = serializers.SerializerMethodField()
   recipient_count = serializers.SerializerMethodField()
   quoted_count = serializers.SerializerMethodField()
@@ -52,36 +52,22 @@ class RFQListSerializer(serializers.ModelSerializer):
     model = RFQ
     fields = [
       "id", "number", "status", "deadline", "include_platform_pool",
-      "auto_generated", "product_name", "sku", "category", "quantity",
+      "auto_generated", "supply_category", "item_count", "total_quantity", "items",
       "expected_delivery", "recipient_count", "quoted_count", "created_at",
     ]
     read_only_fields = fields
 
-  def _first_item(self, obj):
-    items = list(obj.items.all())
-    return items[0] if items else None
+  def get_supply_category(self, obj):
+    return obj.supply_category.name if obj.supply_category_id else None
 
-  def get_product_name(self, obj):
-    item = self._first_item(obj)
-    return item.product_name if item else None
+  def get_item_count(self, obj):
+    return len(obj.items.all())
 
-  def get_sku(self, obj):
-    item = self._first_item(obj)
-    return item.sku if item else None
-
-  def get_category(self, obj):
-    item = self._first_item(obj)
-    return _category_name(item.product) if item else None
-
-  def get_quantity(self, obj):
-    item = self._first_item(obj)
-    return item.quantity if item else None
+  def get_total_quantity(self, obj):
+    return sum(item.quantity for item in obj.items.all())
 
   def get_expected_delivery(self, obj):
-    item = self._first_item(obj)
-    if item is None:
-      return None
-    return obj.created_at.date() + timedelta(days=item.product.lead_time_days)
+    return rfq_expected_delivery(obj)
 
   def get_recipient_count(self, obj):
     return len(obj.recipients.all())
@@ -94,15 +80,17 @@ class RFQListSerializer(serializers.ModelSerializer):
 
 
 class RFQDetailSerializer(RFQListSerializer):
-  items = RFQItemSerializer(many=True, read_only=True)
   recipients = RFQRecipientSerializer(many=True, read_only=True)
-  reorder_suggestion_id = serializers.UUIDField(read_only=True)
+  reorder_suggestion_ids = serializers.SerializerMethodField()
 
   class Meta(RFQListSerializer.Meta):
     fields = RFQListSerializer.Meta.fields + [
-      "notes", "reorder_suggestion_id", "items", "recipients", "updated_at",
+      "notes", "reorder_suggestion_ids", "recipients", "updated_at",
     ]
     read_only_fields = fields
+
+  def get_reorder_suggestion_ids(self, obj):
+    return [s.id for s in obj.reorder_suggestions.all()]
 
 
 class RFQUpdateSerializer(serializers.ModelSerializer):
@@ -128,12 +116,14 @@ class ReorderAlertSerializer(serializers.ModelSerializer):
   category = serializers.SerializerMethodField()
   required_stock = serializers.IntegerField(source="suggested_quantity", read_only=True)
   stock_status = serializers.CharField(source="product.status", read_only=True)  # "Low Stock" / "Out of Stock"
+  rfq_id = serializers.UUIDField(read_only=True)
+
 
   class Meta:
     model = ReorderSuggestion
     fields = [
       "id", "product_id", "product_name", "sku", "category",
-      "required_stock", "stock_status", "status", "created_at",
+      "required_stock", "stock_status", "method", "status", "rfq_id", "created_at",
     ]
     read_only_fields = fields
 
@@ -153,21 +143,30 @@ class SupplierRFQListSerializer(serializers.ModelSerializer):
   number = serializers.CharField(source="rfq.number", read_only=True)
   business_name = serializers.CharField(source="rfq.business.business_name", read_only=True)
   business_city = serializers.CharField(source="rfq.business.city", read_only=True)
+  supply_category = serializers.SerializerMethodField()
   deadline = serializers.DateTimeField(source="rfq.deadline", read_only=True)
   rfq_status = serializers.CharField(source="rfq.status", read_only=True)
   my_status = serializers.CharField(source="status", read_only=True)
   item_count = serializers.SerializerMethodField()
+  total_quantity = serializers.SerializerMethodField()
 
   class Meta:
     model = RFQRecipient
     fields = [
-      "id", "rfq_id", "number", "business_name", "business_city",
-      "deadline", "rfq_status", "my_status", "item_count", "created_at",
+      "id", "rfq_id", "number", "business_name", "business_city", "supply_category",
+      "deadline", "rfq_status", "my_status", "item_count", "total_quantity", "created_at",
     ]
     read_only_fields = fields
 
+  def get_supply_category(self, obj):
+    category = obj.rfq.supply_category
+    return category.name if category else None
+
   def get_item_count(self, obj):
     return len(obj.rfq.items.all())
+
+  def get_total_quantity(self, obj):
+    return sum(item.quantity for item in obj.rfq.items.all())
 
 
 class SupplierRFQDetailSerializer(SupplierRFQListSerializer):
@@ -184,7 +183,8 @@ def rfq_expected_delivery(rfq):
   items = list(rfq.items.all())
   if not items:
     return None
-  return rfq.created_at.date() + timedelta(days=items[0].product.lead_time_days)
+  lead_days = max(item.product.lead_time_days for item in items)
+  return rfq.created_at.date() + timedelta(days=lead_days)
 
 
 class QuotationItemInputSerializer(serializers.Serializer):
@@ -240,12 +240,18 @@ class QuotationSubmitSerializer(serializers.Serializer):
       seen.add(item.id)
 
       quantity = line.get("quantity", item.quantity)
-      if quantity > item.quantity:
+      if quantity != item.quantity:
         raise serializers.ValidationError(
-          f"You can quote at most {item.quantity} units of {item.product_name}."
+          f"Quote the full quantity: {item.quantity} units of {item.product_name}."
         )
       line["rfq_item"] = item
-      line["quantity"] = quantity
+      line["quantity"] = item.quantity
+
+    missing = sorted(i.product_name for i in rfq_items.values() if i.id not in seen)
+    if missing:
+      raise serializers.ValidationError(
+        "Quote every product on this RFQ. Missing: " + ", ".join(missing) + "."
+      )
     return items
 
   def validate(self, attrs):
@@ -314,49 +320,48 @@ class OwnerQuotationSerializer(QuotationSerializer):
   city = serializers.CharField(source="supplier_profile.city", read_only=True)
   supplier_verified = serializers.BooleanField(source="supplier_profile.is_verified", read_only=True)
   source = serializers.CharField(source="recipient.source", read_only=True)
+  rank = serializers.SerializerMethodField()
+  score = serializers.SerializerMethodField()
+  breakdown = serializers.SerializerMethodField()
+  badges = serializers.SerializerMethodField()
 
   class Meta(QuotationSerializer.Meta):
     fields = QUOTATION_FIELDS + [
       "supplier_profile_id", "company_name", "city", "supplier_verified", "source",
+      "rank", "score", "breakdown", "badges",
     ]
     read_only_fields = fields
 
+  def _info(self, obj):
+    return self.context.get("ranking", {}).get(obj.pk)
+
+  def get_rank(self, obj):
+    info = self._info(obj)
+    return info["rank"] if info else None
+
+  def get_score(self, obj):
+    info = self._info(obj)
+    return info["score"] if info else None
+
+  def get_breakdown(self, obj):
+    info = self._info(obj)
+    return info["breakdown"] if info else None
+
+  def get_badges(self, obj):
+    info = self._info(obj)
+    return info["badges"] if info else []
+
 
 class SupplierRFQInboxDetailSerializer(SupplierRFQDetailSerializer):
-  category = serializers.SerializerMethodField()
-  product_name = serializers.SerializerMethodField()
-  sku = serializers.SerializerMethodField()
-  required_quantity = serializers.SerializerMethodField()
   expected_delivery = serializers.SerializerMethodField()
   can_quote = serializers.SerializerMethodField()
   my_quotation = serializers.SerializerMethodField()
 
   class Meta(SupplierRFQDetailSerializer.Meta):
     fields = SupplierRFQDetailSerializer.Meta.fields + [
-      "category", "product_name", "sku", "required_quantity", "expected_delivery",
-      "can_quote", "my_quotation",
+      "expected_delivery", "can_quote", "my_quotation",
     ]
     read_only_fields = fields
-
-  def _first_item(self, obj):
-    items = list(obj.rfq.items.all())
-    return items[0] if items else None
-
-  def get_category(self, obj):
-    item = self._first_item(obj)
-    return _category_name(item.product) if item else None
-
-  def get_product_name(self, obj):
-    item = self._first_item(obj)
-    return item.product_name if item else None
-
-  def get_sku(self, obj):
-    item = self._first_item(obj)
-    return item.sku if item else None
-
-  def get_required_quantity(self, obj):
-    item = self._first_item(obj)
-    return item.quantity if item else None
 
   def get_expected_delivery(self, obj):
     return rfq_expected_delivery(obj.rfq)
@@ -369,5 +374,26 @@ class SupplierRFQInboxDetailSerializer(SupplierRFQDetailSerializer):
       quotation = obj.quotation
     except Quotation.DoesNotExist:
       return None
-    quotation.rfq = obj.rfq 
+    quotation.rfq = obj.rfq
     return QuotationSerializer(quotation).data
+
+class RFQCreateSerializer(serializers.Serializer):
+  quantity = serializers.IntegerField(required=False, min_value=1, max_value=1_000_000)
+  include_platform_pool = serializers.BooleanField(required=False, default=False)
+
+class AlertSelectionSerializer(serializers.Serializer):
+  id = serializers.UUIDField()
+  quantity = serializers.IntegerField(required=False, min_value=1, max_value=1_000_000)
+
+
+class BulkRFQCreateSerializer(serializers.Serializer):
+  alerts = AlertSelectionSerializer(many=True, allow_empty=False)
+  include_platform_pool = serializers.BooleanField(required=False, default=False)
+
+  def validate_alerts(self, alerts):
+    if len(alerts) > 50:
+      raise serializers.ValidationError("You can select at most 50 alerts at a time.")
+    ids = [a["id"] for a in alerts]
+    if len(ids) != len(set(ids)):
+      raise serializers.ValidationError("Each alert can be selected only once.")
+    return alerts
