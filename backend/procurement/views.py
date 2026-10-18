@@ -19,6 +19,7 @@ from django.db import transaction
 from notifications.models import Notification
 from notifications.services import notify_many
 from .alert_services import create_alerts_for_business
+from .ranking import WeightError, parse_weights, rank_quotations
 
 from .SwaggerDocs import (
   reorder_alert_list_docs,
@@ -347,15 +348,30 @@ class RFQQuotationListApi(APIView):
 
   def get(self, request, pk):
     rfq = get_object_or_404(RFQ, pk=pk, business=request.business)
-    quotations = (
+    quotations = list(
       rfq.quotations.exclude(status=Quotation.Status.WITHDRAWN)
       .select_related("rfq", "supplier_profile", "recipient")
       .prefetch_related("items__rfq_item", "rfq__items__product")
-      .order_by("grand_total", "submitted_at")
     )
+    try:
+      ranked = rank_quotations(quotations, parse_weights(request.query_params))
+    except WeightError as err:
+      return error_response(err.message, err.code, status=status.HTTP_400_BAD_REQUEST)
+
+    ordered = ranked
+    if request.query_params.get("sort") == "price":
+      ordered = sorted(
+        ranked, key=lambda r: (r["quotation"].grand_total, r["quotation"].submitted_at)
+      )
     return success_response(
-      "Quotations fetched.", OwnerQuotationSerializer(quotations, many=True).data
+      "Quotations fetched.",
+      OwnerQuotationSerializer(
+        [r["quotation"] for r in ordered],
+        many=True,
+        context={"ranking": {r["quotation"].pk: r for r in ranked}},
+      ).data,
     )
+
 
 @reorder_alert_create_rfq_docs
 class ReorderAlertCreateRFQApi(APIView):

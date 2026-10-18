@@ -240,12 +240,18 @@ class QuotationSubmitSerializer(serializers.Serializer):
       seen.add(item.id)
 
       quantity = line.get("quantity", item.quantity)
-      if quantity > item.quantity:
+      if quantity != item.quantity:
         raise serializers.ValidationError(
-          f"You can quote at most {item.quantity} units of {item.product_name}."
+          f"Quote the full quantity: {item.quantity} units of {item.product_name}."
         )
       line["rfq_item"] = item
-      line["quantity"] = quantity
+      line["quantity"] = item.quantity
+
+    missing = sorted(i.product_name for i in rfq_items.values() if i.id not in seen)
+    if missing:
+      raise serializers.ValidationError(
+        "Quote every product on this RFQ. Missing: " + ", ".join(missing) + "."
+      )
     return items
 
   def validate(self, attrs):
@@ -314,12 +320,36 @@ class OwnerQuotationSerializer(QuotationSerializer):
   city = serializers.CharField(source="supplier_profile.city", read_only=True)
   supplier_verified = serializers.BooleanField(source="supplier_profile.is_verified", read_only=True)
   source = serializers.CharField(source="recipient.source", read_only=True)
+  rank = serializers.SerializerMethodField()
+  score = serializers.SerializerMethodField()
+  breakdown = serializers.SerializerMethodField()
+  badges = serializers.SerializerMethodField()
 
   class Meta(QuotationSerializer.Meta):
     fields = QUOTATION_FIELDS + [
       "supplier_profile_id", "company_name", "city", "supplier_verified", "source",
+      "rank", "score", "breakdown", "badges",
     ]
     read_only_fields = fields
+
+  def _info(self, obj):
+    return self.context.get("ranking", {}).get(obj.pk)
+
+  def get_rank(self, obj):
+    info = self._info(obj)
+    return info["rank"] if info else None
+
+  def get_score(self, obj):
+    info = self._info(obj)
+    return info["score"] if info else None
+
+  def get_breakdown(self, obj):
+    info = self._info(obj)
+    return info["breakdown"] if info else None
+
+  def get_badges(self, obj):
+    info = self._info(obj)
+    return info["badges"] if info else []
 
 
 class SupplierRFQInboxDetailSerializer(SupplierRFQDetailSerializer):
