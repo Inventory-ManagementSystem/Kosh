@@ -115,7 +115,13 @@ class ReorderAlertSerializer(serializers.ModelSerializer):
   sku = serializers.CharField(source="product.sku", read_only=True)
   category = serializers.SerializerMethodField()
   required_stock = serializers.IntegerField(source="suggested_quantity", read_only=True)
-  stock_status = serializers.CharField(source="product.status", read_only=True)  # "Low Stock" / "Out of Stock"
+  stock_status = serializers.CharField(source="product.status", read_only=True)
+  price = serializers.DecimalField(
+    source="product.price", max_digits=12, decimal_places=2, read_only=True
+  )
+  cost_price = serializers.DecimalField(
+    source="product.cost_price", max_digits=12, decimal_places=2, read_only=True
+  )
   rfq_id = serializers.UUIDField(read_only=True)
 
 
@@ -123,7 +129,7 @@ class ReorderAlertSerializer(serializers.ModelSerializer):
     model = ReorderSuggestion
     fields = [
       "id", "product_id", "product_name", "sku", "category",
-      "required_stock", "stock_status", "method", "status", "rfq_id", "created_at",
+      "required_stock", "price", "cost_price", "stock_status", "method", "status", "rfq_id", "created_at",
     ]
     read_only_fields = fields
 
