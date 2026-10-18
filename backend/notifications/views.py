@@ -158,6 +158,71 @@ class MarkAllReadApi(APIView):
     return success_response("All notifications marked as read.", {"updated": updated})
 
 
+class DeleteNotificationApi(APIView):
+  permission_classes = [IsAuthenticated]
+  throttle_classes = [UserRateThrottle]
+
+  @extend_schema(
+    summary="Delete Notification",
+    description=(
+      "Permanently deletes one of your notifications, read or unread. "
+      "Another user's notification returns 404."
+    ),
+    request=None,
+    responses={
+      200: resp("Deleted.", ok_example("Deleted", "Notification deleted.")),
+      401: UNAUTHORIZED_RESPONSE,
+      404: resp("Not found, or not yours.",
+                err_example("Not Found", "No Notification matches the given query.",
+                            "NOT_FOUND")),
+    },
+  )
+  def delete(self, request, pk):
+    notification = get_object_or_404(my_notifications(request), pk=pk)
+    notification.delete()
+    return success_response("Notification deleted.")
+
+
+class DeleteAllNotificationsApi(APIView):
+  permission_classes = [IsAuthenticated]
+  throttle_classes = [UserRateThrottle]
+
+  @extend_schema(
+    summary="Delete All Notifications",
+    description=(
+      "Permanently deletes all of your notifications. Add `?is_read=true` to delete "
+      "only the ones already read (a \"Clear read\" button), or `?is_read=false` for "
+      "only unread ones. Only ever touches your own notifications."
+    ),
+    parameters=[
+      OpenApiParameter(
+        "is_read", OpenApiTypes.BOOL, OpenApiParameter.QUERY,
+        description="`true` = only read ones, `false` = only unread ones. Leave out for all.",
+      ),
+    ],
+    request=None,
+    responses={
+      200: resp("Deleted.",
+                ok_example("All Deleted", "Notifications deleted.", data={"deleted": 12}),
+                ok_example("Nothing To Delete", "Notifications deleted.", data={"deleted": 0})),
+      400: resp("Bad filter value.",
+                err_example("Bad Filter", "Request failed.", "BAD_REQUEST",
+                            errors={"is_read": "Use true or false."})),
+      401: UNAUTHORIZED_RESPONSE,
+    },
+  )
+  def delete(self, request):
+    notifications = my_notifications(request)
+    is_read = request.query_params.get("is_read")
+    if is_read is not None:
+      value = is_read.lower()
+      if value not in ("true", "false"):
+        raise ValidationError({"is_read": "Use true or false."})
+      notifications = notifications.filter(is_read=(value == "true"))
+    deleted, _ = notifications.delete()
+    return success_response("Notifications deleted.", {"deleted": deleted})
+
+
 PUSH_DISABLED_RESPONSE = resp(
   "Push is not configured on the server (Firebase settings missing).",
   err_example("Push Disabled", "Push notifications are not configured.", "PUSH_DISABLED"),
