@@ -92,6 +92,8 @@ ALERT_EXAMPLE = {
   "sku": "SKU-202",
   "category": "Dairy",
   "required_stock": 30,
+  "price": "60.00",
+  "cost_price": "52.00",
   "stock_status": "Low Stock",
   "method": "manual",
   "status": "open",
@@ -377,7 +379,9 @@ reorder_alert_list_docs = extend_schema_view(
       "is created automatically, and `manual` when it does not, in which case the "
       "owner decides with the Create RFQ action. `status` is `open` when no RFQ has "
       "been created yet and `rfq_created` once one has; `rfq_id` is then the id of "
-      "that RFQ, otherwise null. " + ACCESS_NOTE
+      "that RFQ, otherwise null. " 
+      "`price` is the product's selling price per unit and `cost_price` is what the "
+      "business pays per unit; `cost_price` is null if it hasn't been entered. " + ACCESS_NOTE
     ),
     parameters=PAGE_PARAMETERS,
     responses={
