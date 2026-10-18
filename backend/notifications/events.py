@@ -4,6 +4,7 @@ from zoneinfo import ZoneInfo
 
 from django.contrib.auth.models import User
 from django.db import transaction
+from django.utils import timezone
 
 from .models import Notification
 from .services import notify, notify_many
@@ -38,9 +39,14 @@ def when(dt):
   return dt.astimezone(IST).strftime("%d %b, %I:%M %p")
 
 
-def first_product(rfq):
-  item = rfq.items.first()
-  return item.product_name if item else "items"
+def items_label(rfq):
+  items = list(rfq.items.all())
+  if not items:
+    return "items"
+  if len(items) == 1:
+    return items[0].product_name
+  category = f" ({rfq.supply_category.name})" if rfq.supply_category_id else ""
+  return f"{len(items)} products{category}"
 
 
 def supplier_users(rfq, exclude_declined=True):
@@ -76,7 +82,7 @@ def rfq_cancelled(rfq):
   notify_many(
     supplier_users(rfq),
     f"{rfq.number} was cancelled",
-    f"{rfq.business.business_name} cancelled this request for {first_product(rfq)}. "
+    f"{rfq.business.business_name} cancelled this request for {items_label(rfq)}. "
     "No quotation is needed.",
     kind=Kind.RFQ,
   )
@@ -191,3 +197,34 @@ def quotations_rejected(rfq, quotations):
     kind=Kind.QUOTATION,
     push=False,
   )
+
+@safe
+def rfq_deadline_reminder(rfq, hours):
+  from procurement.models import RFQRecipient
+
+  waiting = rfq.recipients.filter(
+    status__in=[RFQRecipient.Status.SENT, RFQRecipient.Status.VIEWED]
+  ).select_related("supplier_profile__user")
+  users = [r.supplier_profile.user for r in waiting]
+  if not users:
+    return
+  notify_many(
+    users,
+    f"{rfq.number} closes in about {hours} hours",
+    f"{rfq.business.business_name} is waiting for your quotation. "
+    f"Send it before {when(rfq.deadline)}.",
+    kind=Notification.Kind.RFQ,
+  )
+
+@safe
+def rfq_quotes_ready(rfq):
+  from procurement.models import Quotation
+
+  count = rfq.quotations.filter(status=Quotation.Status.SUBMITTED).count()
+  if count:
+    title = f"Quotations ready for {rfq.number}"
+    body = f"{count} quotation(s) received. Compare them and choose a supplier."
+  else:
+    title = f"No quotations for {rfq.number}"
+    body = "The deadline passed without any quotation."
+  notify(rfq.business.owner, title, body, kind=Notification.Kind.QUOTATION)

@@ -19,7 +19,7 @@ services:
   worker:
     build: ./backend
     restart: unless-stopped
-    command: celery -A config worker -l info --concurrency=2 --max-memory-per-child=300000
+    command: celery -A config worker -l info --concurrency=1 --max-memory-per-child=300000
     mem_limit: 500m
     env_file:
       - .env
@@ -31,7 +31,7 @@ services:
     build: ./backend
     restart: unless-stopped
     command: celery -A config beat -l info -s /tmp/celerybeat-schedule
-    mem_limit: 150m
+    mem_limit: 200m
     env_file:
       - .env
     depends_on:
