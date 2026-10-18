@@ -22,3 +22,4 @@ Pillow
 django-cleanup
 celery
 firebase-admin
+google-genai
