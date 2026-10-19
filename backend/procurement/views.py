@@ -84,7 +84,7 @@ def rfq_queryset(business):
     RFQ.objects.filter(business=business)
     .select_related("supply_category")
     .prefetch_related(
-      "items__product__category", "recipients__supplier_profile", "reorder_suggestions"
+      "items__product__category","items__product__supply_category", "recipients__supplier_profile", "reorder_suggestions"
     )
   )
 
@@ -202,7 +202,7 @@ class ReorderAlertListApi(APIView):
     qs = (
       ReorderSuggestion.objects
       .filter(business=request.business, status__in=ReorderSuggestion.ACTIVE)
-      .select_related("product__category")
+      .select_related("product__category", "product__supply_category")
     )
     return paginated_response(request, qs, ReorderAlertSerializer, "Alerts fetched.")
 

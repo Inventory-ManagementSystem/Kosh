@@ -8,20 +8,21 @@ from .models import RFQ, Quotation, QuotationItem, RFQItem, RFQRecipient, Reorde
 from .services import calculate_totals
 
 
-def _category_name(product):
-  return product.category.name if product.category else None
+
 
 
 class RFQItemSerializer(serializers.ModelSerializer):
-  category = serializers.SerializerMethodField()
+  category = serializers.CharField(source="product.display_category", read_only=True)
+  supply_category = serializers.CharField(
+    source="product.supply_category.name", read_only=True, default=None
+  )
 
   class Meta:
     model = RFQItem
-    fields = ["id", "product", "product_name", "sku", "category", "quantity"]
+    fields = ["id", "product", "product_name", "sku", "category", "quantity", "supply_category"]
     read_only_fields = fields
 
-  def get_category(self, obj):
-    return _category_name(obj.product)
+
 
 
 class RFQRecipientSerializer(serializers.ModelSerializer):
@@ -113,7 +114,13 @@ class ReorderAlertSerializer(serializers.ModelSerializer):
   product_id = serializers.UUIDField(read_only=True)
   product_name = serializers.CharField(source="product.name", read_only=True)
   sku = serializers.CharField(source="product.sku", read_only=True)
-  category = serializers.SerializerMethodField()
+  category = serializers.CharField(source="product.display_category", read_only=True)
+  supply_category = serializers.CharField(
+    source="product.supply_category.name", read_only=True, default=None
+  )
+  supply_category_id = serializers.IntegerField(
+    source="product.supply_category_id", read_only=True
+  )
   required_stock = serializers.IntegerField(source="suggested_quantity", read_only=True)
   stock_status = serializers.CharField(source="product.status", read_only=True)
   price = serializers.DecimalField(
@@ -128,13 +135,12 @@ class ReorderAlertSerializer(serializers.ModelSerializer):
   class Meta:
     model = ReorderSuggestion
     fields = [
-      "id", "product_id", "product_name", "sku", "category",
+      "id", "product_id", "product_name", "sku", "category", "supply_category", "supply_category_id",
       "required_stock", "price", "cost_price", "stock_status", "method", "status", "rfq_id", "created_at",
     ]
     read_only_fields = fields
 
-  def get_category(self, obj):
-    return _category_name(obj.product)
+
 
 
 class SupplierRFQItemSerializer(serializers.ModelSerializer):
