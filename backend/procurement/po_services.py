@@ -105,6 +105,8 @@ def accept_quotation(business, quotation_id):
 
   if advance <= 0:
     po = confirm_order(po)
+  else:
+    transaction.on_commit(lambda: events.quotation_accepted(quotation))
   return po
 
 

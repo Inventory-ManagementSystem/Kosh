@@ -21,6 +21,7 @@ from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from accounts.pagination import StandardPagination
 
 from .ledger import record_movement, create_dispatch
+from procurement.alert_services import check_low_stock_on_commit
 
 from .SwaggerDocs import (
   product_list_create_docs,
@@ -36,6 +37,8 @@ from .SwaggerDocs import (
   stock_movement_list_docs,
 )
 import uuid
+
+REORDER_FIELDS = {"low_stock_threshold", "lead_time_days", "safety_stock", "reorder_quantity", "is_active"}
 
 class InventoryPagination(StandardPagination):
     message = "Product list fetched."
@@ -172,7 +175,10 @@ class ProductDetailApi(APIView):
       context={"request": request},
     )
     serializer.is_valid(raise_exception=True)
-    serializer.save()
+    with transaction.atomic():
+      serializer.save()
+      if REORDER_FIELDS & set(serializer.validated_data):
+        check_low_stock_on_commit(request.business, [product.pk])
     return success_response(
       "Product updated.",
       serializer.data,
@@ -208,6 +214,8 @@ class ProductAdjustStockApi(APIView):
         user=request.user,
         note=data.get("note", ""),
       )
+      if data["change"] < 0:
+        check_low_stock_on_commit(request.business, [pk])
     product = movement.product
 
     serializer = ProductSerializer(
@@ -481,17 +489,19 @@ class DispatchListCreateApi(APIView):
     serializer.is_valid(raise_exception=True)
     data = serializer.validated_data
 
-    note = create_dispatch(
-      business=request.business,
-      outlet_id=data["outlet"].pk,
-      items=[
-        {"product_id": i["product"].pk, "quantity": i["quantity"]}
-        for i in data["items"]
-      ],
-      user=request.user,
-      dispatch_date=data.get("dispatch_date"),
-      notes=data.get("notes", ""),
-    )
+    with transaction.atomic():
+      note = create_dispatch(
+        business=request.business,
+        outlet_id=data["outlet"].pk,
+        items=[
+          {"product_id": i["product"].pk, "quantity": i["quantity"]}
+          for i in data["items"]
+        ],
+        user=request.user,
+        dispatch_date=data.get("dispatch_date"),
+        notes=data.get("notes", ""),
+      )
+      check_low_stock_on_commit(request.business, [i["product"].pk for i in data["items"]])
     return success_response(
       "Dispatch recorded.",
       DispatchNoteSerializer(note, context={"request": request}).data,

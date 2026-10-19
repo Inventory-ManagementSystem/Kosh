@@ -16,8 +16,7 @@ from accounts.responses import error_response, success_response, validation_erro
 from accounts.swagger import UNAUTHORIZED_RESPONSE, ok_example, resp
 from suppliers.permissions import IsSupplier
 from django.db import transaction
-from notifications.models import Notification
-from notifications.services import notify_many
+from notifications import events
 from .alert_services import create_alerts_for_business
 from .ranking import WeightError, parse_weights, rank_quotations
 
@@ -125,8 +124,12 @@ class RFQDetailApi(APIView):
     rfq = self._get_rfq(request, pk)
     serializer = RFQUpdateSerializer(rfq, data=request.data, partial=True)
     serializer.is_valid(raise_exception=True)
+    before = {field: getattr(rfq, field) for field in ("deadline", "notes")}
     serializer.save()
     rfq = self._get_rfq(request, pk)  # reload with prefetches
+    changed = [field for field, old in before.items() if getattr(rfq, field) != old]
+    if changed:
+      events.rfq_updated(rfq, changed)
     return Response({
       "success": True,
       "message": "RFQ updated.",
@@ -163,17 +166,7 @@ class RFQCancelApi(APIView):
         updated_at=timezone.now(),
       )
 
-      recipients = rfq.recipients.select_related("supplier_profile__user").exclude(
-        status=RFQRecipient.Status.DECLINED
-      )
-      notify_many(
-        [r.supplier_profile.user for r in recipients],
-        f"RFQ {rfq.number} was cancelled",
-        f"{request.business.business_name} cancelled this request. "
-        "You don't need to send a quotation.",
-        kind=Notification.Kind.RFQ,
-        push=False,
-      )
+      events.rfq_cancelled(rfq)
 
     return Response({"success": True, "message": "RFQ cancelled.", "data": None})
 
@@ -216,7 +209,7 @@ class ReorderAlertRefreshApi(APIView):
   permission_classes = [HasBusinessAccess, IsOwner]
 
   def post(self, request):
-    created = create_alerts_for_business(request.business, notify=False)
+    created = create_alerts_for_business(request.business)
     active = ReorderSuggestion.objects.filter(
       business=request.business, status__in=ReorderSuggestion.ACTIVE
     ).count()

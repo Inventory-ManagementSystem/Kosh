@@ -5,9 +5,11 @@ from inventory.reorder import calculate_reorder, get_dispatch_stats
 from notifications import events
 
 from .models import ReorderSuggestion
+import logging
+logger = logging.getLogger(__name__)
 
 
-def create_alerts_for_business(business, notify=True):
+def create_alerts_for_business(business, notify=True, product_ids=None):
   stats = get_dispatch_stats(business)
   active = set(
     ReorderSuggestion.objects.filter(
@@ -17,7 +19,10 @@ def create_alerts_for_business(business, notify=True):
 
   created = 0
   new_low = []
-  for product in Product.objects.filter(business=business, is_active=True).iterator():
+  products = Product.objects.filter(business=business, is_active=True)
+  if product_ids is not None:
+    products = products.filter(pk__in=product_ids)
+  for product in products.iterator():
     if product.id in active:
       continue
     result = calculate_reorder(product, stats)
@@ -42,3 +47,15 @@ def create_alerts_for_business(business, notify=True):
   if notify:
     events.low_stock_alerts(business, new_low)
   return created
+
+
+def check_low_stock_on_commit(business, product_ids):
+  product_ids = list(product_ids)
+
+  def run():
+    try:
+      create_alerts_for_business(business, product_ids=product_ids)
+    except Exception:
+      logger.exception("Low-stock check failed for business %s", business.pk)
+
+  transaction.on_commit(run)
