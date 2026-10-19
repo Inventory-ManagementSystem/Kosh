@@ -334,12 +334,12 @@ class PurchaseOrderItem(models.Model):
  
  
 class Payment(models.Model):
- 
   class Status(models.TextChoices):
     CREATED = "created", "Created"
     PAID = "paid", "Paid"
     FAILED = "failed", "Failed"
- 
+    REFUNDED = "refunded", "Refunded"
+
   id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
   purchase_order = models.ForeignKey(
     PurchaseOrder, on_delete=models.CASCADE, related_name="payments"
@@ -348,12 +348,17 @@ class Payment(models.Model):
   status = models.CharField(max_length=10, choices=Status.choices, default=Status.CREATED)
   razorpay_order_id = models.CharField(max_length=64, unique=True)
   razorpay_payment_id = models.CharField(max_length=64, unique=True, null=True, blank=True)
+  failure_reason = models.CharField(max_length=255, blank=True, default="")
+  refund_id = models.CharField(max_length=64, blank=True, default="")
   paid_at = models.DateTimeField(null=True, blank=True)
   created_at = models.DateTimeField(auto_now_add=True)
   updated_at = models.DateTimeField(auto_now=True)
  
   class Meta:
     ordering = ["-created_at"]
+    indexes = [
+      models.Index(fields=["purchase_order", "status"], name="payment_po_status_idx"),
+    ]
     constraints = [
       models.UniqueConstraint(
         fields=["purchase_order"],
