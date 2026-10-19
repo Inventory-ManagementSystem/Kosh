@@ -14,6 +14,7 @@ from accounts.responses import error_response, success_response, validation_erro
 
 from .llm import AssistantError, GeminiAgent
 from .models import ChatConversation, ChatMessage
+from .throttles import AssistantBurstThrottle, AssistantDailyThrottle
 from .serializers import (
   ChatConversationDetailSerializer,
   ChatConversationSerializer,
@@ -48,6 +49,7 @@ class ConversationPagination(StandardPagination):
 )
 class ChatApi(APIView):
   permission_classes = [IsAuthenticated, HasBusinessAccess]
+  throttle_classes = [AssistantBurstThrottle, AssistantDailyThrottle]
 
   def post(self, request):
     serializer = ChatRequestSerializer(data=request.data)
