@@ -191,3 +191,16 @@ def cancel_unpaid_order(business, po_id):
       "PAYMENT_RECEIVED",
     )
   return _cancel_locked(po, timezone.now())
+
+@transaction.atomic
+def expire_unpaid_order(po_id):
+  now = timezone.now()
+  po = PurchaseOrder.objects.select_for_update().filter(pk=po_id).first()
+  if po is None or po.status != PurchaseOrder.Status.AWAITING_ADVANCE:
+    return False
+  if po.advance_due_by is None or po.advance_due_by > now:
+    return False
+  if po.payments.filter(status=Payment.Status.PAID).exists():
+    return False
+  _cancel_locked(po, now)
+  return True

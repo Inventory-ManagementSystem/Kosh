@@ -196,6 +196,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "procurement.tasks.notify_rfq_deadlines_passed",
         "schedule": crontab(minute=0),  
     },
+    "cancel-expired-unpaid-orders": {
+        "task": "procurement.tasks.cancel_expired_unpaid_orders",
+        "schedule": crontab(minute="*/15"),
+    },
 }
 
 # Password validation
