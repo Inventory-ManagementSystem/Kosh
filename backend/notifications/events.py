@@ -228,3 +228,37 @@ def rfq_quotes_ready(rfq):
     title = f"No quotations for {rfq.number}"
     body = "The deadline passed without any quotation."
   notify(rfq.business.owner, title, body, kind=Notification.Kind.QUOTATION)
+
+@safe
+def purchase_order_issued(po):
+  advance = (
+    f" The advance of {rupees(po.advance_amount)} is already paid."
+    if po.advance_amount > 0 else ""
+  )
+  notify(
+    po.supplier_profile.user,
+    f"New purchase order {po.number}",
+    f"{po.business.business_name} ordered {items_label(po.rfq)} worth "
+    f"{rupees(po.grand_total)}. Deliver by {po.delivery_date:%d %b %Y}.{advance}",
+    kind=Kind.PURCHASE_ORDER,
+  )
+ 
+ 
+@safe
+def rfq_awarded(rfq):
+  from procurement.models import RFQRecipient
+ 
+  waiting = rfq.recipients.filter(
+    status__in=[RFQRecipient.Status.SENT, RFQRecipient.Status.VIEWED]
+  ).select_related("supplier_profile__user")
+  users = [r.supplier_profile.user for r in waiting]
+  if not users:
+    return
+  notify_many(
+    users,
+    f"{rfq.number} was awarded",
+    f"{rfq.business.business_name} chose another supplier for {items_label(rfq)}. "
+    "No quotation is needed.",
+    kind=Kind.RFQ,
+    push=False,
+  )

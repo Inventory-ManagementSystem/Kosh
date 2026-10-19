@@ -10,3 +10,6 @@ class QuotationWriteThrottle(UserRateThrottle):
     if request.method in SAFE_METHODS:
       return True
     return super().allow_request(request, view)
+
+class OrderWriteThrottle(QuotationWriteThrottle):
+  scope = "order_write"

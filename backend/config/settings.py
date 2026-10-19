@@ -158,6 +158,7 @@ CACHES = {
     },
 }
 
+PO_ADVANCE_EXPIRY_HOURS = int(os.getenv("PO_ADVANCE_EXPIRY_HOURS", "24"))
 CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://redis:6379/0")
 CELERY_TIMEZONE = "Asia/Kolkata"
 CELERY_TASK_TIME_LIMIT = 300
