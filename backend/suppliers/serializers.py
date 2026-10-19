@@ -88,10 +88,15 @@ class SupplierProfileSerializer(serializers.ModelSerializer):
       field in validated_data and validated_data[field] != getattr(instance, field)
       for field in ("company_name", "gstin")
     )
-    if instance.is_verified and identity_changed:
+    lost_verification = instance.is_verified and identity_changed
+    if lost_verification:
       instance.is_verified = False
       instance.verified_at = None
-    return super().update(instance, validated_data)
+    instance = super().update(instance, validated_data)
+    if lost_verification:
+      from notifications import events
+      events.supplier_unverified(instance)
+    return instance
 
 class OwnerSupplierSerializer(serializers.ModelSerializer):
   display_name = serializers.SerializerMethodField()

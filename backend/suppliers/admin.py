@@ -3,6 +3,7 @@ from django.contrib import admin, messages
 # Register your models here.
 
 from django.utils import timezone
+from notifications import events
 from .models import SupplierProfile, SupplyCategory
 
 
@@ -27,19 +28,31 @@ class SupplierProfileAdmin(admin.ModelAdmin):
 
   @admin.action(description="Verify selected suppliers")
   def mark_verified(self, request, queryset):
-    count = queryset.filter(is_verified=False).update(
+    profiles = list(queryset.filter(is_verified=False).select_related("user"))
+    count = queryset.filter(pk__in=[p.pk for p in profiles]).update(
       is_verified=True, verified_at=timezone.now(),
     )
+    for profile in profiles:
+      events.supplier_verified(profile)
     self.message_user(request, f"{count} supplier(s) verified.", messages.SUCCESS)
 
   @admin.action(description="Remove verification from selected suppliers")
   def mark_unverified(self, request, queryset):
-    count = queryset.filter(is_verified=True).update(
+    profiles = list(queryset.filter(is_verified=True).select_related("user"))
+    count = queryset.filter(pk__in=[p.pk for p in profiles]).update(
       is_verified=False, verified_at=None,
     )
+    for profile in profiles:
+      events.supplier_unverified(profile)
     self.message_user(request, f"{count} supplier(s) unverified.", messages.WARNING)
 
   def save_model(self, request, obj, form, change):
+    verification_changed = change and "is_verified" in form.changed_data
     if "is_verified" in form.changed_data:
       obj.verified_at = timezone.now() if obj.is_verified else None
     super().save_model(request, obj, form, change)
+    if verification_changed:
+      if obj.is_verified:
+        events.supplier_verified(obj)
+      else:
+        events.supplier_unverified(obj)
