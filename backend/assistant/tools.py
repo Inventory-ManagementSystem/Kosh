@@ -13,6 +13,7 @@ from inventory.models import Category, DispatchItem, DispatchNote, Product, Stoc
 from inventory.reorder import calculate_reorder, get_dispatch_stats
 from procurement.models import RFQ, Quotation, ReorderSuggestion
 from suppliers.models import Supplier
+from .knowledge import get_app_help
 
 MAX_LIMIT = 25
 MAX_DAYS = 365
@@ -452,6 +453,7 @@ def search_customers(business, query="", limit=15):
 
 
 TOOL_FUNCTIONS = {
+  "get_app_help": get_app_help,
   "get_business_insights": get_business_insights,
   "get_inventory_overview": get_inventory_overview,
   "search_products": search_products,
@@ -469,6 +471,15 @@ _LIMIT = {"type": "INTEGER", "description": f"Max rows to return (1-{MAX_LIMIT})
 _DAYS = {"type": "INTEGER", "description": "How many days back to look. Default 30."}
 
 TOOL_DECLARATIONS = [
+  {
+    "name": "get_app_help",
+    "description": (
+      "The official guide to how Kosh works: roles and what each role (owner, employee, "
+      "supplier) can and cannot do, available features, features that do NOT exist, and "
+      "screen names. Call this for ANY question about how Kosh works, permissions, who can "
+      "see or do something, or where to find something in the app."
+    ),
+  },
   {
     "name": "get_business_insights",
     "description": (
