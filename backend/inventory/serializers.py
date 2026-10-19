@@ -50,10 +50,10 @@ class ProductSerializer(serializers.ModelSerializer):
         read_only=True,
     )
     category_name = serializers.CharField(
-        source="category.name",
+        source="display_category",
         read_only=True,
-        default=None,
     )
+
     supply_category = serializers.PrimaryKeyRelatedField(
         queryset=SupplyCategory.objects.filter(is_active=True),
         required=False,

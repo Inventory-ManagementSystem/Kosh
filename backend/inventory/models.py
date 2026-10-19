@@ -156,6 +156,14 @@ class Product(models.Model):
     if self.quantity <= self.low_stock_threshold:
       return self.LOW_STOCK
     return self.IN_STOCK
+
+  @property
+  def display_category(self):
+    if self.category_id:
+      return self.category.name
+    if self.supply_category_id:
+      return self.supply_category.name
+    return None
   
   class Meta:
     ordering = ["-created_at"]

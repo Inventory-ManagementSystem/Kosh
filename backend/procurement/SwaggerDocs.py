@@ -24,6 +24,7 @@ RFQ_ITEMS_EXAMPLE = [
     "product_name": "Amul Dahi",
     "sku": "SKU-787328",
     "category": "Dairy",
+    "supply_category": "Dairy",
     "quantity": 70,
   },
   {
@@ -32,6 +33,7 @@ RFQ_ITEMS_EXAMPLE = [
     "product_name": "Amul Milk 1L",
     "sku": "SKU-202",
     "category": "Dairy",
+    "supply_category": "Dairy",
     "quantity": 70,
   },
 ]
@@ -91,6 +93,8 @@ ALERT_EXAMPLE = {
   "product_name": "Amul Milk 1L",
   "sku": "SKU-202",
   "category": "Dairy",
+  "supply_category": "Dairy",
+  "supply_category_id": 3,
   "required_stock": 30,
   "price": "60.00",
   "cost_price": "52.00",
