@@ -1257,3 +1257,60 @@ po_accept_docs = extend_schema_view(
     },
   ),
 )
+
+PO_NOT_FOUND_RESPONSE = resp(
+  "No such order in this business. An order that belongs to another business "
+  "also returns this.",
+  err_example("Not Found", "Order not found.", "ORDER_NOT_FOUND"),
+)
+
+PURCHASE_ORDER_CANCELLED_EXAMPLE = {
+  **PURCHASE_ORDER_EXAMPLE,
+  "status": "cancelled",
+}
+
+po_cancel_docs = extend_schema_view(
+  post=extend_schema(
+    operation_id="procurement_orders_cancel",
+    summary="Cancel Unpaid Order",
+    description=(
+      "Cancels an order that is still `awaiting_advance`, that is, a quotation was "
+      "accepted but the advance has not been paid. The order becomes `cancelled`, "
+      "the quotation goes back to `submitted` and the RFQ is reopened (`open`, or "
+      "`closed` if its deadline has already passed), so the owner can accept a "
+      "quotation again. Suppliers are not notified because they never saw the order. "
+      "An order that is already `issued` or later cannot be cancelled here, and "
+      "neither can an order whose advance payment has already been received. "
+      "The server also cancels unpaid orders automatically once `advance_due_by` "
+      "has passed. No request body is needed. " + OWNER_NOTE
+    ),
+    request=None,
+    responses={
+      200: resp(
+        "Order cancelled.",
+        ok_example(
+          "Cancelled",
+          "Order cancelled. The quotation can be accepted again.",
+          data=PURCHASE_ORDER_CANCELLED_EXAMPLE,
+        ),
+      ),
+      401: UNAUTHORIZED_RESPONSE,
+      403: OWNER_ONLY_RESPONSE,
+      404: PO_NOT_FOUND_RESPONSE,
+      409: resp(
+        "The order can't be cancelled.",
+        err_example(
+          "Not Cancellable",
+          "Only an order that is waiting for its advance can be cancelled.",
+          "ORDER_NOT_CANCELLABLE",
+        ),
+        err_example(
+          "Payment Received",
+          "The advance has already been paid, so this order can't be cancelled here.",
+          "PAYMENT_RECEIVED",
+        ),
+      ),
+      429: THROTTLED_RESPONSE,
+    },
+  ),
+)

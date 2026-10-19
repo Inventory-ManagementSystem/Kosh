@@ -37,6 +37,7 @@ from .SwaggerDocs import (
   reorder_alert_bulk_create_rfq_docs,
   reorder_alert_refresh_docs,
   po_accept_docs,
+  po_cancel_docs,
 )
 
 from .models import RFQ, Quotation, RFQRecipient, ReorderSuggestion, PurchaseOrder
@@ -73,7 +74,7 @@ from .serializers import RFQCreateSerializer
 
 from .throttles import QuotationWriteThrottle, OrderWriteThrottle
 
-from .po_services import PurchaseOrderError, accept_quotation
+from .po_services import PurchaseOrderError, accept_quotation, cancel_unpaid_order
 
 def paginated_response(request, queryset, serializer_class, message):
   paginator = StandardPagination()
@@ -454,10 +455,13 @@ class ReorderAlertDismissApi(APIView):
 
 PO_ERROR_STATUS = {
   "QUOTATION_NOT_FOUND": 404,
+  "ORDER_NOT_FOUND": 404,
   "RFQ_ALREADY_AWARDED": 409,
   "RFQ_CANCELLED": 409,
   "QUOTATION_NOT_ACTIVE": 409,
   "ORDER_CANCELLED": 409,
+  "ORDER_NOT_CANCELLABLE": 409,
+  "PAYMENT_RECEIVED": 409,
 }
  
  
@@ -486,4 +490,21 @@ class QuotationAcceptApi(APIView):
       message = "Quotation accepted. Pay the advance to confirm the order."
     return success_response(
       message, PurchaseOrderSummarySerializer(po).data, status=status.HTTP_201_CREATED
+    )
+
+@po_cancel_docs
+class PurchaseOrderCancelApi(APIView):
+  permission_classes = [HasBusinessAccess, IsOwner]
+  throttle_classes = [OrderWriteThrottle]
+
+  def post(self, request, pk):
+    try:
+      po = cancel_unpaid_order(request.business, pk)
+    except PurchaseOrderError as err:
+      return po_error_response(err)
+
+    po = PurchaseOrder.objects.select_related("supplier_profile", "rfq").get(pk=po.pk)
+    return success_response(
+      "Order cancelled. The quotation can be accepted again.",
+      PurchaseOrderSummarySerializer(po).data,
     )
