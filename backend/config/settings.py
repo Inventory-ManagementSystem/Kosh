@@ -57,6 +57,9 @@ FIREBASE_MESSAGING_SENDER_ID = os.getenv("FIREBASE_MESSAGING_SENDER_ID", "")
 FIREBASE_APP_ID = os.getenv("FIREBASE_APP_ID", "")
 FIREBASE_VAPID_KEY = os.getenv("FIREBASE_VAPID_KEY", "")
 
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
+
 # Application definition
 SITE_ID=1
 INSTALLED_APPS = [
@@ -85,6 +88,7 @@ INSTALLED_APPS = [
     'customers',
     'django_cleanup.apps.CleanupConfig',
     'procurement',
+    'assistant.apps.AssistantConfig',
 ]
 
 JAZZMIN_SETTINGS = {
