@@ -1150,3 +1150,110 @@ reorder_alert_refresh_docs = extend_schema_view(
     },
   ),
 )
+
+PURCHASE_ORDER_EXAMPLE = {
+  "id": "2f6b9d04-7c1e-4a83-b5f2-9e0d3a8c6b17",
+  "number": "PO-0001",
+  "status": "awaiting_advance",
+  "rfq_id": "c3d8a2f1-6b47-4e09-9a15-2f7e1b8d4c60",
+  "rfq_number": "RFQ-0007",
+  "quotation_id": "6d2f8b14-93ae-4c57-b1e0-5a7c9d3f2e81",
+  "supplier_profile_id": "2c9f6a85-e7d1-4b03-9a58-4f1d8e3b6c70",
+  "company_name": "Sharma Traders",
+  "subtotal": "5040.00",
+  "tax_total": "252.00",
+  "grand_total": "5292.00",
+  "advance_amount": "1000.00",
+  "balance_amount": "4292.00",
+  "delivery_date": "2026-10-15",
+  "advance_due_by": "2026-10-14T10:00:00Z",
+  "issued_at": None,
+  "created_at": "2026-10-13T10:00:00Z",
+}
+ 
+PURCHASE_ORDER_NO_ADVANCE_EXAMPLE = {
+  **PURCHASE_ORDER_EXAMPLE,
+  "status": "issued",
+  "advance_amount": "0.00",
+  "balance_amount": "5292.00",
+  "advance_due_by": None,
+  "issued_at": "2026-10-13T10:00:00Z",
+}
+ 
+QUOTATION_NOT_FOUND_RESPONSE = resp(
+  "No such quotation in this business. A quotation that belongs to another "
+  "business also returns this.",
+  err_example("Not Found", "Quotation not found.", "QUOTATION_NOT_FOUND"),
+)
+ 
+po_accept_docs = extend_schema_view(
+  post=extend_schema(
+    operation_id="procurement_quotations_accept",
+    summary="Accept Quotation",
+    description=(
+      "Accepts a quotation and creates the purchase order (PO). The RFQ must be "
+      "`open` or `closed` (deadline passed, nobody chosen yet); the quotation must "
+      "be `submitted`, still valid (`valid_until` not passed) and cover every RFQ "
+      "item at the full quantity. In one step the server creates the PO with a copy "
+      "of the quotation's items, GST, totals, delivery date and advance, marks the "
+      "quotation `accepted` and marks the RFQ `awarded`. From then on the supplier "
+      "can no longer revise or withdraw the quotation, and no second quotation can "
+      "be accepted. No supplier is notified yet and the other quotations are left "
+      "as they are.\n\n"
+      "If the quotation has an advance, the PO starts as `awaiting_advance` and the "
+      "owner must pay the advance before `advance_due_by`. When the payment is "
+      "confirmed the order becomes `issued`, the other quotations are rejected and "
+      "the suppliers are told. If the advance is 0 there is nothing to pay: the "
+      "order is `issued` straight away (`advance_due_by` is null) and the suppliers "
+      "are told at once. `balance_amount` is the grand total minus the advance, due "
+      "after delivery. No request body is needed. " + OWNER_NOTE
+    ),
+    request=None,
+    responses={
+      201: resp(
+        "Quotation accepted, PO created.",
+        ok_example(
+          "Advance To Pay",
+          "Quotation accepted. Pay the advance to confirm the order.",
+          data=PURCHASE_ORDER_EXAMPLE,
+        ),
+        ok_example(
+          "No Advance",
+          "Quotation accepted and order issued.",
+          data=PURCHASE_ORDER_NO_ADVANCE_EXAMPLE,
+        ),
+      ),
+      400: resp(
+        "The quotation can't be accepted.",
+        err_example(
+          "Quotation Expired",
+          "This quotation expired on 21 Oct 2026.",
+          "QUOTATION_EXPIRED",
+        ),
+        err_example(
+          "Quotation Incomplete",
+          "This quotation doesn't cover every item at the full quantity.",
+          "QUOTATION_INCOMPLETE",
+        ),
+      ),
+      401: UNAUTHORIZED_RESPONSE,
+      403: OWNER_ONLY_RESPONSE,
+      404: QUOTATION_NOT_FOUND_RESPONSE,
+      409: resp(
+        "The RFQ or the quotation is no longer available.",
+        err_example(
+          "Already Awarded",
+          "A quotation has already been accepted for this RFQ.",
+          "RFQ_ALREADY_AWARDED",
+        ),
+        err_example("RFQ Cancelled", "This RFQ was cancelled.", "RFQ_CANCELLED"),
+        err_example(
+          "Quotation Not Active",
+          "This quotation is no longer active.",
+          "QUOTATION_NOT_ACTIVE",
+        ),
+      ),
+      429: THROTTLED_RESPONSE,
+    },
+  ),
+)

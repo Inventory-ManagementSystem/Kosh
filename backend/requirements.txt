@@ -22,3 +22,5 @@ Pillow
 django-cleanup
 celery
 firebase-admin
+google-genai
+razorpay==2.0.1

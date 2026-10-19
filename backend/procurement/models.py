@@ -231,3 +231,141 @@ class QuotationItem(models.Model):
 
   def __str__(self):
     return f"{self.rfq_item.product_name} x {self.quantity} @ {self.unit_price}"
+
+class PurchaseOrder(models.Model):
+  class Status(models.TextChoices):
+    AWAITING_ADVANCE = "awaiting_advance", "Awaiting advance"
+    ISSUED = "issued", "Issued"
+    DISPATCHED = "dispatched", "Dispatched"
+    PARTIALLY_RECEIVED = "partially_received", "Partially received"
+    RECEIVED = "received", "Received"
+    CANCELLED = "cancelled", "Cancelled"
+
+  SUPPLIER_VISIBLE = (
+    Status.ISSUED, Status.DISPATCHED, Status.PARTIALLY_RECEIVED, Status.RECEIVED,
+  )
+ 
+  id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+  business = models.ForeignKey(
+    "accounts.Business", on_delete=models.CASCADE, related_name="purchase_orders"
+  )
+  number = models.CharField(max_length=20)
+ 
+  rfq = models.ForeignKey(RFQ, on_delete=models.RESTRICT, related_name="purchase_orders")
+  quotation = models.ForeignKey(
+    Quotation, on_delete=models.RESTRICT, related_name="purchase_orders"
+  )
+  supplier_profile = models.ForeignKey(
+    "suppliers.SupplierProfile", on_delete=models.PROTECT, related_name="purchase_orders"
+  )
+  status = models.CharField(
+    max_length=20, choices=Status.choices, default=Status.AWAITING_ADVANCE
+  )
+ 
+  subtotal = models.DecimalField(**MONEY, default=0)
+  tax_total = models.DecimalField(**MONEY, default=0)
+  grand_total = models.DecimalField(**MONEY, default=0)
+  advance_amount = models.DecimalField(**MONEY, default=0)
+  delivery_date = models.DateField()
+ 
+  advance_due_by = models.DateTimeField(null=True, blank=True)
+  issued_at = models.DateTimeField(null=True, blank=True)
+  cancelled_at = models.DateTimeField(null=True, blank=True)
+  created_at = models.DateTimeField(auto_now_add=True)
+  updated_at = models.DateTimeField(auto_now=True)
+ 
+  class Meta:
+    ordering = ["-created_at"]
+    indexes = [
+      models.Index(fields=["business", "status"]),
+      models.Index(fields=["supplier_profile", "status"]),
+      models.Index(fields=["status", "advance_due_by"]),
+    ]
+    constraints = [
+      models.UniqueConstraint(
+        fields=["business", "number"], name="uniq_po_number_per_business"
+      ),
+      models.UniqueConstraint(
+        fields=["rfq"],
+        condition=~models.Q(status="cancelled"),
+        name="uniq_active_po_per_rfq",
+      ),
+      models.CheckConstraint(
+        condition=models.Q(advance_amount__gte=0)
+        & models.Q(advance_amount__lte=models.F("grand_total")),
+        name="po_advance_within_total",
+      ),
+    ]
+ 
+  @property
+  def balance_amount(self):
+    return self.grand_total - self.advance_amount
+ 
+  def __str__(self):
+    return self.number
+ 
+ 
+class PurchaseOrderItem(models.Model):
+  id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+  purchase_order = models.ForeignKey(
+    PurchaseOrder, on_delete=models.CASCADE, related_name="items"
+  )
+  product = models.ForeignKey(
+    "inventory.Product", on_delete=models.PROTECT, related_name="purchase_order_items"
+  )
+  product_name = models.CharField(max_length=255)
+  sku = models.CharField(max_length=64)
+  quantity = models.PositiveIntegerField(validators=[MinValueValidator(1)])
+  unit_price = models.DecimalField(**MONEY)
+  gst_rate = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+  line_subtotal = models.DecimalField(**MONEY)
+  line_tax = models.DecimalField(**MONEY)
+  line_total = models.DecimalField(**MONEY)
+ 
+  class Meta:
+    constraints = [
+      models.UniqueConstraint(
+        fields=["purchase_order", "product"], name="uniq_product_per_po"
+      ),
+    ]
+ 
+  def __str__(self):
+    return f"{self.product_name} x {self.quantity}"
+ 
+ 
+class Payment(models.Model):
+  class Status(models.TextChoices):
+    CREATED = "created", "Created"
+    PAID = "paid", "Paid"
+    FAILED = "failed", "Failed"
+    REFUNDED = "refunded", "Refunded"
+
+  id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+  purchase_order = models.ForeignKey(
+    PurchaseOrder, on_delete=models.CASCADE, related_name="payments"
+  )
+  amount = models.DecimalField(**MONEY)
+  status = models.CharField(max_length=10, choices=Status.choices, default=Status.CREATED)
+  razorpay_order_id = models.CharField(max_length=64, unique=True)
+  razorpay_payment_id = models.CharField(max_length=64, unique=True, null=True, blank=True)
+  failure_reason = models.CharField(max_length=255, blank=True, default="")
+  refund_id = models.CharField(max_length=64, blank=True, default="")
+  paid_at = models.DateTimeField(null=True, blank=True)
+  created_at = models.DateTimeField(auto_now_add=True)
+  updated_at = models.DateTimeField(auto_now=True)
+ 
+  class Meta:
+    ordering = ["-created_at"]
+    indexes = [
+      models.Index(fields=["purchase_order", "status"], name="payment_po_status_idx"),
+    ]
+    constraints = [
+      models.UniqueConstraint(
+        fields=["purchase_order"],
+        condition=models.Q(status="paid"),
+        name="uniq_paid_payment_per_po",
+      ),
+    ]
+ 
+  def __str__(self):
+    return f"{self.purchase_order.number} - {self.status}"

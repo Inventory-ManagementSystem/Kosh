@@ -57,6 +57,13 @@ FIREBASE_MESSAGING_SENDER_ID = os.getenv("FIREBASE_MESSAGING_SENDER_ID", "")
 FIREBASE_APP_ID = os.getenv("FIREBASE_APP_ID", "")
 FIREBASE_VAPID_KEY = os.getenv("FIREBASE_VAPID_KEY", "")
 
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
+
+RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID", "")
+RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET", "")
+RAZORPAY_WEBHOOK_SECRET = os.getenv("RAZORPAY_WEBHOOK_SECRET", "")
+
 # Application definition
 SITE_ID=1
 INSTALLED_APPS = [
@@ -85,6 +92,7 @@ INSTALLED_APPS = [
     'customers',
     'django_cleanup.apps.CleanupConfig',
     'procurement',
+    'assistant.apps.AssistantConfig',
 ]
 
 JAZZMIN_SETTINGS = {
@@ -158,6 +166,7 @@ CACHES = {
     },
 }
 
+PO_ADVANCE_EXPIRY_HOURS = int(os.getenv("PO_ADVANCE_EXPIRY_HOURS", "24"))
 CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://redis:6379/0")
 CELERY_TIMEZONE = "Asia/Kolkata"
 CELERY_TASK_TIME_LIMIT = 300

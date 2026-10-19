@@ -36,6 +36,7 @@ from django.contrib.auth.hashers import make_password
 from django.db import IntegrityError, transaction
 from django.conf import settings
 import logging
+from notifications import events
 logger = logging.getLogger(__name__)
 
 from drf_spectacular.utils import (extend_schema,OpenApiResponse,OpenApiExample)
@@ -1233,6 +1234,8 @@ class InviteEmployeeApi(APIView):
                 status=status.HTTP_409_CONFLICT,
             )
 
+        events.employee_invited(invite)
+
         try:
             send_mail(
                 f"You've been invited to join {business.business_name} on Kosh",
@@ -1364,11 +1367,17 @@ class RemoveEmployeeApi(APIView):
                 "Only business owners can manage employees.", "NOT_BUSINESS_OWNER",
                 status=status.HTTP_403_FORBIDDEN,
             )
-        deleted, _ = Employee.objects.filter(id=employee_id, business=business).delete()
-        if not deleted:
+        employee = (
+            Employee.objects.filter(id=employee_id, business=business)
+            .select_related("user").first()
+        )
+        if employee is None:
             return error_response(
                 "Employee not found.", "EMPLOYEE_NOT_FOUND", status=status.HTTP_404_NOT_FOUND,
             )
+        employee_user = employee.user
+        employee.delete()
+        events.employee_removed(business, employee_user)
         return success_response("Employee removed.")
 
 @extend_schema(
@@ -1468,6 +1477,8 @@ class AcceptInviteApi(APIView):
                 status=status.HTTP_409_CONFLICT,
             )
 
+        events.invite_accepted(business, user)
+
         return success_response("Invite accepted.", data={
             "role": "employee",
             "business": {"id": business.id, "business_name": business.business_name},
@@ -1490,11 +1501,17 @@ class DeclineInviteApi(APIView):
     throttle_classes = [UserRateThrottle]
 
     def post(self, request, invite_id):
-        deleted, _ = EmployeeInvite.objects.filter(
-            id=invite_id, email__iexact=request.user.email, status="pending"
-        ).delete()
-        if not deleted:
+        invite = (
+            EmployeeInvite.objects.filter(
+                id=invite_id, email__iexact=request.user.email, status="pending"
+            )
+            .select_related("business__owner").first()
+        )
+        if invite is None:
             return error_response(
                 "Invite not found.", "INVITE_NOT_FOUND", status=status.HTTP_404_NOT_FOUND,
             )
+        business = invite.business
+        invite.delete()
+        events.invite_declined(business, request.user)
         return success_response("Invite declined.")

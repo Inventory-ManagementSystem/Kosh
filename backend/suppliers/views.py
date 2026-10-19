@@ -17,6 +17,7 @@ from .serializers import SupplierProfileSerializer, SupplyCategorySerializer, Ow
 from .throttles import SupplierRegistrationThrottle, OwnerSupplierThrottle
 
 from .SwaggerDocs import owner_supplier_list_create_docs, owner_supplier_detail_docs
+from notifications import events
 
 import logging
 logger = logging.getLogger(__name__)
@@ -279,6 +280,8 @@ class OwnerSupplierListCreateApi(APIView):
         "This supplier is already in your list.", "SUPPLIER_EXISTS",
         status=status.HTTP_409_CONFLICT,
       )
+
+    events.supplier_added(supplier)
 
     if supplier.linked_account_id is None:
       try:

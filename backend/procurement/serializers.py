@@ -4,7 +4,7 @@ from decimal import Decimal
 from django.utils import timezone
 from rest_framework import serializers
 
-from .models import RFQ, Quotation, QuotationItem, RFQItem, RFQRecipient, ReorderSuggestion
+from .models import RFQ, Quotation, QuotationItem, RFQItem, RFQRecipient, ReorderSuggestion, PurchaseOrder
 from .services import calculate_totals
 
 
@@ -409,3 +409,24 @@ class BulkRFQCreateSerializer(serializers.Serializer):
     if len(ids) != len(set(ids)):
       raise serializers.ValidationError("Each alert can be selected only once.")
     return alerts
+
+class PurchaseOrderSummarySerializer(serializers.ModelSerializer):
+  rfq_id = serializers.UUIDField(read_only=True)
+  rfq_number = serializers.CharField(source="rfq.number", read_only=True)
+  quotation_id = serializers.UUIDField(read_only=True)
+  supplier_profile_id = serializers.UUIDField(read_only=True)
+  company_name = serializers.CharField(source="supplier_profile.company_name", read_only=True)
+  balance_amount = serializers.SerializerMethodField()
+ 
+  class Meta:
+    model = PurchaseOrder
+    fields = [
+      "id", "number", "status", "rfq_id", "rfq_number", "quotation_id",
+      "supplier_profile_id", "company_name",
+      "subtotal", "tax_total", "grand_total", "advance_amount", "balance_amount",
+      "delivery_date", "advance_due_by", "issued_at", "created_at",
+    ]
+    read_only_fields = fields
+ 
+  def get_balance_amount(self, obj):
+    return str(obj.balance_amount)

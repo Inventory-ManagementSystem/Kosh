@@ -16,8 +16,7 @@ from accounts.responses import error_response, success_response, validation_erro
 from accounts.swagger import UNAUTHORIZED_RESPONSE, ok_example, resp
 from suppliers.permissions import IsSupplier
 from django.db import transaction
-from notifications.models import Notification
-from notifications.services import notify_many
+from notifications import events
 from .alert_services import create_alerts_for_business
 from .ranking import WeightError, parse_weights, rank_quotations
 
@@ -36,9 +35,10 @@ from .SwaggerDocs import (
   reorder_alert_dismiss_docs,
   reorder_alert_bulk_create_rfq_docs,
   reorder_alert_refresh_docs,
+  po_accept_docs,
 )
 
-from .models import RFQ, Quotation, RFQRecipient, ReorderSuggestion
+from .models import RFQ, Quotation, RFQRecipient, ReorderSuggestion, PurchaseOrder
 from .serializers import (
   OwnerQuotationSerializer,
   QuotationSerializer,
@@ -51,6 +51,7 @@ from .serializers import (
   SupplierRFQListSerializer,
   BulkRFQCreateSerializer, 
   RFQCreateSerializer,
+  PurchaseOrderSummarySerializer,
 )
 from .services import (
   QuotationError,
@@ -69,7 +70,9 @@ from .rfq_services import (
 
 from .serializers import RFQCreateSerializer
 
-from .throttles import QuotationWriteThrottle
+from .throttles import QuotationWriteThrottle, OrderWriteThrottle
+
+from .po_services import PurchaseOrderError, accept_quotation
 
 def paginated_response(request, queryset, serializer_class, message):
   paginator = StandardPagination()
@@ -121,8 +124,12 @@ class RFQDetailApi(APIView):
     rfq = self._get_rfq(request, pk)
     serializer = RFQUpdateSerializer(rfq, data=request.data, partial=True)
     serializer.is_valid(raise_exception=True)
+    before = {field: getattr(rfq, field) for field in ("deadline", "notes")}
     serializer.save()
     rfq = self._get_rfq(request, pk)  # reload with prefetches
+    changed = [field for field, old in before.items() if getattr(rfq, field) != old]
+    if changed:
+      events.rfq_updated(rfq, changed)
     return Response({
       "success": True,
       "message": "RFQ updated.",
@@ -159,17 +166,7 @@ class RFQCancelApi(APIView):
         updated_at=timezone.now(),
       )
 
-      recipients = rfq.recipients.select_related("supplier_profile__user").exclude(
-        status=RFQRecipient.Status.DECLINED
-      )
-      notify_many(
-        [r.supplier_profile.user for r in recipients],
-        f"RFQ {rfq.number} was cancelled",
-        f"{request.business.business_name} cancelled this request. "
-        "You don't need to send a quotation.",
-        kind=Notification.Kind.RFQ,
-        push=False,
-      )
+      events.rfq_cancelled(rfq)
 
     return Response({"success": True, "message": "RFQ cancelled.", "data": None})
 
@@ -212,7 +209,7 @@ class ReorderAlertRefreshApi(APIView):
   permission_classes = [HasBusinessAccess, IsOwner]
 
   def post(self, request):
-    created = create_alerts_for_business(request.business, notify=False)
+    created = create_alerts_for_business(request.business)
     active = ReorderSuggestion.objects.filter(
       business=request.business, status__in=ReorderSuggestion.ACTIVE
     ).count()
@@ -447,3 +444,39 @@ class ReorderAlertDismissApi(APIView):
     suggestion.status = ReorderSuggestion.Status.CLOSED
     suggestion.save(update_fields=["status", "updated_at"])
     return Response({"success": True, "message": "Alert dismissed.", "data": None})
+
+PO_ERROR_STATUS = {
+  "QUOTATION_NOT_FOUND": 404,
+  "RFQ_ALREADY_AWARDED": 409,
+  "RFQ_CANCELLED": 409,
+  "QUOTATION_NOT_ACTIVE": 409,
+  "ORDER_CANCELLED": 409,
+}
+ 
+ 
+def po_error_response(err):
+  return error_response(
+    err.message, err.code,
+    status=PO_ERROR_STATUS.get(err.code, status.HTTP_400_BAD_REQUEST),
+  )
+ 
+ 
+@po_accept_docs
+class QuotationAcceptApi(APIView):
+  permission_classes = [HasBusinessAccess, IsOwner]
+  throttle_classes = [OrderWriteThrottle]
+ 
+  def post(self, request, pk):
+    try:
+      po = accept_quotation(request.business, pk)
+    except PurchaseOrderError as err:
+      return po_error_response(err)
+ 
+    po = PurchaseOrder.objects.select_related("supplier_profile", "rfq").get(pk=po.pk)
+    if po.status == PurchaseOrder.Status.ISSUED:
+      message = "Quotation accepted and order issued."
+    else:
+      message = "Quotation accepted. Pay the advance to confirm the order."
+    return success_response(
+      message, PurchaseOrderSummarySerializer(po).data, status=status.HTTP_201_CREATED
+    )
