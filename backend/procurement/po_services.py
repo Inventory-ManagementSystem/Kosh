@@ -7,7 +7,14 @@ from django.utils import timezone
 from accounts.models import Business
 from notifications import events
 
-from .models import RFQ, PurchaseOrder, PurchaseOrderItem, Quotation, RFQRecipient
+from .models import(
+    RFQ,
+    Payment,
+    PurchaseOrder, 
+    PurchaseOrderItem, 
+    Quotation, 
+    RFQRecipient,
+)
 
 
 class PurchaseOrderError(Exception):
@@ -150,3 +157,52 @@ def confirm_order(po):
 
   transaction.on_commit(lambda: _announce_confirmed(po, rejected))
   return po
+
+def _cancel_locked(po, now):
+  rfq = RFQ.objects.select_for_update().get(pk=po.rfq_id)
+
+  po.status = PurchaseOrder.Status.CANCELLED
+  po.cancelled_at = now
+  po.save(update_fields=["status", "cancelled_at", "updated_at"])
+
+  Quotation.objects.filter(
+    pk=po.quotation_id, status=Quotation.Status.ACCEPTED
+  ).update(status=Quotation.Status.SUBMITTED, updated_at=now)
+
+  if rfq.status == RFQ.Status.AWARDED:
+    rfq.status = RFQ.Status.OPEN if rfq.deadline > now else RFQ.Status.CLOSED
+    rfq.save(update_fields=["status", "updated_at"])
+  return po
+
+
+@transaction.atomic
+def cancel_unpaid_order(business, po_id):
+  po = PurchaseOrder.objects.select_for_update().filter(
+    pk=po_id, business=business
+  ).first()
+  if po is None:
+    raise PurchaseOrderError("Order not found.", "ORDER_NOT_FOUND")
+  if po.status != PurchaseOrder.Status.AWAITING_ADVANCE:
+    raise PurchaseOrderError(
+      "Only an order that is waiting for its advance can be cancelled.",
+      "ORDER_NOT_CANCELLABLE",
+    )
+  if po.payments.filter(status=Payment.Status.PAID).exists():
+    raise PurchaseOrderError(
+      "The advance has already been paid, so this order can't be cancelled here.",
+      "PAYMENT_RECEIVED",
+    )
+  return _cancel_locked(po, timezone.now())
+
+@transaction.atomic
+def expire_unpaid_order(po_id):
+  now = timezone.now()
+  po = PurchaseOrder.objects.select_for_update().filter(pk=po_id).first()
+  if po is None or po.status != PurchaseOrder.Status.AWAITING_ADVANCE:
+    return False
+  if po.advance_due_by is None or po.advance_due_by > now:
+    return False
+  if po.payments.filter(status=Payment.Status.PAID).exists():
+    return False
+  _cancel_locked(po, now)
+  return True

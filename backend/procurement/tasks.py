@@ -7,8 +7,14 @@ from accounts.models import Business
 from notifications import events
 
 from .alert_services import create_alerts_for_business
-from .models import RFQ, ReorderSuggestion
+
+import logging
+
+from .models import RFQ, ReorderSuggestion, PurchaseOrder
+from .po_services import expire_unpaid_order
 from .rfq_services import RFQCreationError, create_rfqs_for_suggestions
+
+logger = logging.getLogger(__name__)
 
 REMINDER_HOURS = 6
 
@@ -89,3 +95,20 @@ def notify_rfq_deadlines_passed():
   for rfq in rfqs:
     events.rfq_quotes_ready(rfq)
   return len(rfqs)
+
+@shared_task
+def cancel_expired_unpaid_orders():
+  ids = list(
+    PurchaseOrder.objects.filter(
+      status=PurchaseOrder.Status.AWAITING_ADVANCE,
+      advance_due_by__lte=timezone.now(),
+    ).values_list("pk", flat=True)
+  )
+  cancelled = 0
+  for po_id in ids:
+    try:
+      if expire_unpaid_order(po_id):
+        cancelled += 1
+    except Exception:
+      logger.exception("Could not expire order %s", po_id)
+  return cancelled

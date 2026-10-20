@@ -18,5 +18,10 @@ urlpatterns = [
   path("alerts/<uuid:pk>/dismiss/", views.ReorderAlertDismissApi.as_view(), name="reorder-alert-dismiss"),
   path("alerts/refresh/", views.ReorderAlertRefreshApi.as_view(), name="reorder-alert-refresh"),
   path("quotations/<uuid:pk>/accept/", views.QuotationAcceptApi.as_view(), name="quotation-accept"),
+  path("orders/<uuid:pk>/cancel/", views.PurchaseOrderCancelApi.as_view(), name="order-cancel"),
+  path("orders/", views.PurchaseOrderListApi.as_view(), name="order-list"),
+  path("orders/<uuid:pk>/", views.PurchaseOrderDetailApi.as_view(), name="order-detail"),
+  path("supplier/orders/", views.SupplierPurchaseOrderListApi.as_view(), name="supplier-order-list"),
+  path("supplier/orders/<uuid:pk>/", views.SupplierPurchaseOrderDetailApi.as_view(), name="supplier-order-detail"),
   
 ]
