@@ -4,7 +4,16 @@ from decimal import Decimal
 from django.utils import timezone
 from rest_framework import serializers
 
-from .models import RFQ, Quotation, QuotationItem, RFQItem, RFQRecipient, ReorderSuggestion, PurchaseOrder
+from .models import (
+    RFQ, 
+    Quotation, 
+    QuotationItem, 
+    RFQItem, 
+    RFQRecipient, 
+    ReorderSuggestion, 
+    PurchaseOrder, 
+    PurchaseOrderItem,
+)
 from .services import calculate_totals
 
 
@@ -430,3 +439,97 @@ class PurchaseOrderSummarySerializer(serializers.ModelSerializer):
  
   def get_balance_amount(self, obj):
     return str(obj.balance_amount)
+
+class PurchaseOrderItemSerializer(serializers.ModelSerializer):
+  product_id = serializers.UUIDField(read_only=True)
+  image = serializers.ImageField(source="product.image", read_only=True)
+  category = serializers.CharField(source="product.display_category", read_only=True)
+  supply_category = serializers.CharField(
+    source="product.supply_category.name", read_only=True, default=None
+  )
+
+  class Meta:
+    model = PurchaseOrderItem
+    fields = [
+      "id", "product_id", "product_name", "sku", "image", "category", "supply_category",
+      "quantity", "unit_price", "gst_rate", "line_subtotal", "line_tax", "line_total",
+    ]
+    read_only_fields = fields
+
+
+def po_late_by_days(po):
+  if po.status != PurchaseOrder.Status.ISSUED:
+    return 0
+  return max((timezone.localdate() - po.delivery_date).days, 0)
+
+
+class PurchaseOrderListSerializer(PurchaseOrderSummarySerializer):
+  item_count = serializers.SerializerMethodField()
+  total_quantity = serializers.SerializerMethodField()
+  is_late = serializers.SerializerMethodField()
+  late_by_days = serializers.SerializerMethodField()
+
+  class Meta(PurchaseOrderSummarySerializer.Meta):
+    fields = PurchaseOrderSummarySerializer.Meta.fields + [
+      "item_count", "total_quantity", "is_late", "late_by_days",
+    ]
+    read_only_fields = fields
+
+  def get_item_count(self, obj):
+    return len(obj.items.all())
+
+  def get_total_quantity(self, obj):
+    return sum(item.quantity for item in obj.items.all())
+
+  def get_late_by_days(self, obj):
+    return po_late_by_days(obj)
+
+  def get_is_late(self, obj):
+    return po_late_by_days(obj) > 0
+
+
+class SupplierPurchaseOrderListSerializer(PurchaseOrderListSerializer):
+  business_name = serializers.CharField(source="business.business_name", read_only=True)
+  business_city = serializers.CharField(source="business.city", read_only=True)
+
+  class Meta(PurchaseOrderListSerializer.Meta):
+    fields = PurchaseOrderListSerializer.Meta.fields + ["business_name", "business_city"]
+    read_only_fields = fields
+
+
+class PurchaseOrderDetailSerializer(PurchaseOrderListSerializer):
+  items = PurchaseOrderItemSerializer(many=True, read_only=True)
+  supplier = serializers.SerializerMethodField()
+  buyer = serializers.SerializerMethodField()
+  advance_paid = serializers.SerializerMethodField()
+
+  class Meta(PurchaseOrderListSerializer.Meta):
+    fields = PurchaseOrderListSerializer.Meta.fields + [
+      "cancelled_at", "advance_paid", "supplier", "buyer", "items",
+    ]
+    read_only_fields = fields
+
+  def get_advance_paid(self, obj):
+    return any(p.status == "paid" for p in obj.payments.all())
+
+  def get_supplier(self, obj):
+    profile = obj.supplier_profile
+    return {
+      "company_name": profile.company_name,
+      "phone": profile.phone,
+      "email": profile.user.email,
+      "address": profile.address,
+      "city": profile.city,
+      "gstin": profile.gstin,
+    }
+
+  def get_buyer(self, obj):
+    business = obj.business
+    owner = business.owner
+    return {
+      "business_name": business.business_name,
+      "business_type": business.business_type,
+      "city": business.city,
+      "owner_name": getattr(getattr(owner, "profile", None), "name", None) or None,
+      "email": owner.email,
+    }

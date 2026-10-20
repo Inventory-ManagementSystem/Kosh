@@ -1314,3 +1314,186 @@ po_cancel_docs = extend_schema_view(
     },
   ),
 )
+
+PO_ITEM_EXAMPLE = {
+  "id": "5b8e2c71-3d94-4f06-a1c7-9e0d6b3f8a24",
+  "product_id": "5d0c7e91-4b3a-4a28-8f16-c2e9a7b1d054",
+  "product_name": "Amul Dahi",
+  "sku": "SKU-787328",
+  "image": "https://example-bucket.s3.amazonaws.com/products/dahi.jpg",
+  "category": "Dairy",
+  "supply_category": "Dairy",
+  "quantity": 70,
+  "unit_price": "42.00",
+  "gst_rate": "5.00",
+  "line_subtotal": "2940.00",
+  "line_tax": "147.00",
+  "line_total": "3087.00",
+}
+
+PURCHASE_ORDER_LIST_ITEM_EXAMPLE = {
+  **PURCHASE_ORDER_NO_ADVANCE_EXAMPLE,
+  "item_count": 2,
+  "total_quantity": 140,
+  "is_late": False,
+  "late_by_days": 0,
+}
+
+PURCHASE_ORDER_DETAIL_EXAMPLE = {
+  **PURCHASE_ORDER_LIST_ITEM_EXAMPLE,
+  "cancelled_at": None,
+  "advance_paid": False,
+  "supplier": {
+    "company_name": "Sharma Traders",
+    "phone": "9876543210",
+    "email": "sharma@example.com",
+    "address": "12 Industrial Area",
+    "city": "Ghaziabad",
+    "gstin": "09ABCDE1234F1Z5",
+  },
+  "buyer": {
+    "business_name": "Gupta Kirana",
+    "business_type": "Retail",
+    "city": "Delhi",
+    "owner_name": "Ramesh Gupta",
+    "email": "ramesh@example.com",
+  },
+  "items": [PO_ITEM_EXAMPLE],
+}
+
+PO_PAGE_NOT_FOUND_RESPONSE = resp(
+  "The page number is out of range.",
+  err_example("Invalid Page", "Invalid page.", "NOT_FOUND"),
+)
+
+PO_DETAIL_NOT_FOUND_RESPONSE = resp(
+  "No such order for this user. An order that belongs to someone else also "
+  "returns this.",
+  err_example("Not Found", "No PurchaseOrder matches the given query.", "NOT_FOUND"),
+)
+
+PO_FIELDS_NOTE = (
+  "`status` is `awaiting_advance` (accepted, advance not paid yet), `issued` (the "
+  "supplier can see it), `dispatched`, `partially_received`, `received` or "
+  "`cancelled`. `balance_amount` is the grand total minus the advance, due after "
+  "delivery. `is_late` is true while an `issued` order is past its `delivery_date`; "
+  "`late_by_days` says by how many days."
+)
+
+po_list_docs = extend_schema_view(
+  get=extend_schema(
+    operation_id="procurement_orders_list",
+    summary="List Orders",
+    description=(
+      "Returns the purchase orders of the logged-in user's business, newest first, "
+      "paginated. " + PO_FIELDS_NOTE + " " + ACCESS_NOTE
+    ),
+    parameters=[
+      OpenApiParameter(
+        "status", OpenApiTypes.STR, OpenApiParameter.QUERY,
+        description=(
+          "Filter by `status`. Any value that is not a status is ignored and all "
+          "orders are returned."
+        ),
+      ),
+      *PAGE_PARAMETERS,
+    ],
+    responses={
+      200: resp(
+        "Paginated order list.",
+        ok_example("Orders", "Orders fetched.", data=paginated(PURCHASE_ORDER_LIST_ITEM_EXAMPLE)),
+        ok_example("No Orders", "Orders fetched.", data=paginated()),
+      ),
+      401: UNAUTHORIZED_RESPONSE,
+      403: FORBIDDEN_RESPONSE,
+      404: PO_PAGE_NOT_FOUND_RESPONSE,
+    },
+  ),
+)
+
+po_detail_docs = extend_schema_view(
+  get=extend_schema(
+    operation_id="procurement_orders_retrieve",
+    summary="Get Order",
+    description=(
+      "Returns one purchase order with everything the Track Order screen needs: "
+      "the `items` (each with the product `image`, `category` and `supply_category`, "
+      "which are read from the product and can be null), the `supplier` contact "
+      "details and the `buyer` details. `advance_paid` is true once the advance "
+      "payment has been received. " + PO_FIELDS_NOTE + " " + ACCESS_NOTE
+    ),
+    responses={
+      200: resp(
+        "Order details.",
+        ok_example("Order", "Order fetched.", data=PURCHASE_ORDER_DETAIL_EXAMPLE),
+      ),
+      401: UNAUTHORIZED_RESPONSE,
+      403: FORBIDDEN_RESPONSE,
+      404: PO_DETAIL_NOT_FOUND_RESPONSE,
+    },
+  ),
+)
+
+SUPPLIER_PO_NOTE = (
+  "Supplier only. A supplier sees only their own orders, and only once an order is "
+  "`issued` or later; an order that is `awaiting_advance` or `cancelled` is not listed "
+  "and returns a 404."
+)
+
+supplier_po_list_docs = extend_schema_view(
+  get=extend_schema(
+    operation_id="procurement_supplier_orders_list",
+    summary="Supplier: List My Orders",
+    description=(
+      "The supplier's purchase orders, newest first, paginated. "
+      + PO_FIELDS_NOTE + " " + SUPPLIER_PO_NOTE
+    ),
+    parameters=[
+      OpenApiParameter(
+        "status", OpenApiTypes.STR, OpenApiParameter.QUERY,
+        description=(
+          "Filter by `status`: `issued`, `dispatched`, `partially_received` or "
+          "`received`. Any other value is ignored."
+        ),
+      ),
+      *PAGE_PARAMETERS,
+    ],
+    responses={
+      200: resp(
+        "Paginated order list.",
+        ok_example(
+          "Orders", "Orders fetched.",
+          data=paginated({
+            **PURCHASE_ORDER_LIST_ITEM_EXAMPLE,
+            "business_name": "Gupta Kirana",
+            "business_city": "Delhi",
+          }),
+        ),
+        ok_example("No Orders", "Orders fetched.", data=paginated()),
+      ),
+      401: UNAUTHORIZED_RESPONSE,
+      403: NOT_SUPPLIER_RESPONSE,
+      404: PO_PAGE_NOT_FOUND_RESPONSE,
+    },
+  ),
+)
+
+supplier_po_detail_docs = extend_schema_view(
+  get=extend_schema(
+    operation_id="procurement_supplier_orders_retrieve",
+    summary="Supplier: Get Order",
+    description=(
+      "One purchase order with its items, the buyer's details and the supplier's "
+      "own details. " + PO_FIELDS_NOTE + " " + SUPPLIER_PO_NOTE
+    ),
+    responses={
+      200: resp(
+        "Order details.",
+        ok_example("Order", "Order fetched.", data=PURCHASE_ORDER_DETAIL_EXAMPLE),
+      ),
+      401: UNAUTHORIZED_RESPONSE,
+      403: NOT_SUPPLIER_RESPONSE,
+      404: PO_DETAIL_NOT_FOUND_RESPONSE,
+    },
+  ),
+)

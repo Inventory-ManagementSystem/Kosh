@@ -38,6 +38,12 @@ from .SwaggerDocs import (
   reorder_alert_refresh_docs,
   po_accept_docs,
   po_cancel_docs,
+  po_cancel_docs,
+  po_list_docs,
+  po_detail_docs,
+  supplier_po_list_docs,
+  supplier_po_detail_docs,
+
 )
 
 from .models import RFQ, Quotation, RFQRecipient, ReorderSuggestion, PurchaseOrder
@@ -54,6 +60,11 @@ from .serializers import (
   BulkRFQCreateSerializer, 
   RFQCreateSerializer,
   PurchaseOrderSummarySerializer,
+  PurchaseOrderSummarySerializer,
+  PurchaseOrderListSerializer,
+  PurchaseOrderDetailSerializer,
+  SupplierPurchaseOrderListSerializer,
+
 )
 from .services import (
   QuotationError,
@@ -507,4 +518,70 @@ class PurchaseOrderCancelApi(APIView):
     return success_response(
       "Order cancelled. The quotation can be accepted again.",
       PurchaseOrderSummarySerializer(po).data,
+    )
+
+def po_queryset(base):
+  return (
+    base.select_related("rfq", "business__owner__profile", "supplier_profile__user")
+    .prefetch_related(
+      "items__product__category", "items__product__supply_category", "payments"
+    )
+  )
+
+
+@po_list_docs
+class PurchaseOrderListApi(APIView):
+  permission_classes = [HasBusinessAccess]
+
+  def get(self, request):
+    qs = po_queryset(PurchaseOrder.objects.filter(business=request.business))
+    status_param = request.query_params.get("status")
+    if status_param in PurchaseOrder.Status.values:
+      qs = qs.filter(status=status_param)
+    return paginated_response(request, qs, PurchaseOrderListSerializer, "Orders fetched.")
+
+
+@po_detail_docs
+class PurchaseOrderDetailApi(APIView):
+  permission_classes = [HasBusinessAccess]
+
+  def get(self, request, pk):
+    po = get_object_or_404(
+      po_queryset(PurchaseOrder.objects.filter(business=request.business)), pk=pk
+    )
+    return success_response(
+      "Order fetched.",
+      PurchaseOrderDetailSerializer(po, context={"request": request}).data,
+    )
+
+
+def supplier_po_base(supplier):
+  return PurchaseOrder.objects.filter(
+    supplier_profile=supplier, status__in=PurchaseOrder.SUPPLIER_VISIBLE
+  )
+
+
+@supplier_po_list_docs
+class SupplierPurchaseOrderListApi(APIView):
+  permission_classes = [IsAuthenticated, IsSupplier]
+
+  def get(self, request):
+    qs = po_queryset(supplier_po_base(request.supplier))
+    status_param = request.query_params.get("status")
+    if status_param in PurchaseOrder.SUPPLIER_VISIBLE:
+      qs = qs.filter(status=status_param)
+    return paginated_response(
+      request, qs, SupplierPurchaseOrderListSerializer, "Orders fetched."
+    )
+
+
+@supplier_po_detail_docs
+class SupplierPurchaseOrderDetailApi(APIView):
+  permission_classes = [IsAuthenticated, IsSupplier]
+
+  def get(self, request, pk):
+    po = get_object_or_404(po_queryset(supplier_po_base(request.supplier)), pk=pk)
+    return success_response(
+      "Order fetched.",
+      PurchaseOrderDetailSerializer(po, context={"request": request}).data,
     )
