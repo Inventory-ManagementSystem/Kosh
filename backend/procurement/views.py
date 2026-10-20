@@ -40,6 +40,8 @@ from .SwaggerDocs import (
   reorder_alert_bulk_create_rfq_docs,
   reorder_alert_refresh_docs,
   po_accept_docs,
+  po_advance_docs,
+  po_advance_verify_docs,
   po_cancel_docs,
   po_cancel_docs,
   po_list_docs,
@@ -99,6 +101,17 @@ from .serializers import RFQCreateSerializer
 from .throttles import QuotationWriteThrottle, OrderWriteThrottle
 
 from .po_services import PurchaseOrderError, accept_quotation, cancel_unpaid_order
+
+import logging
+from django.conf import settings
+from rest_framework.permissions import AllowAny
+from .payment_services import (
+  PaymentError, WebhookError, handle_webhook,
+  start_advance_payment, to_paise, verify_advance_payment,
+)
+from .serializers import AdvanceVerifySerializer, PaymentSerializer
+
+logger = logging.getLogger(__name__)
 
 def paginated_response(request, queryset, serializer_class, message):
   paginator = StandardPagination()
@@ -485,6 +498,17 @@ PO_ERROR_STATUS = {
   "RFQ_CANCELLED": 409,
   "QUOTATION_NOT_ACTIVE": 409,
   "ORDER_CANCELLED": 409,
+  "ORDER_NOT_FOUND": 404,
+  "PAYMENT_NOT_FOUND": 404,
+  "ADVANCE_ALREADY_PAID": 409,
+  "ADVANCE_EXPIRED": 409,
+  "NO_ADVANCE_DUE": 409,
+  "PAYMENT_NOT_CAPTURED": 409,
+  "ORDER_MISMATCH": 400,
+  "INVALID_SIGNATURE": 400,
+  "AMOUNT_MISMATCH": 400,
+  "GATEWAY_ERROR": 502,
+  "PAYMENTS_NOT_CONFIGURED": 503,
   "ORDER_NOT_CANCELLABLE": 409,
   "PAYMENT_RECEIVED": 409,
   "ALREADY_DISPATCHED": 409,
@@ -518,6 +542,97 @@ class QuotationAcceptApi(APIView):
       message, PurchaseOrderSummarySerializer(po).data, status=status.HTTP_201_CREATED
     )
 
+
+def _owner_po(request, pk):
+  return (
+    PurchaseOrder.objects.select_related("supplier_profile", "rfq")
+    .filter(pk=pk, business=request.business)
+    .first()
+  )
+
+@po_advance_docs
+class AdvancePaymentApi(APIView):
+  permission_classes = [HasBusinessAccess, IsOwner]
+  throttle_classes = [OrderWriteThrottle]
+
+  def get(self, request, pk):
+    po = _owner_po(request, pk)
+    if po is None:
+      return error_response("Purchase order not found.", "ORDER_NOT_FOUND", status=404)
+    return success_response("Advance status.", {
+      "order": PurchaseOrderSummarySerializer(po).data,
+      "payments": PaymentSerializer(po.payments.all(), many=True).data,
+    })
+
+  def post(self, request, pk):
+    try:
+      po, payment = start_advance_payment(request.business, pk)
+    except PaymentError as err:
+      return po_error_response(err)
+
+    user = request.user
+    profile_name = getattr(getattr(user, "profile", None), "name", "") or ""
+    return success_response("Checkout ready.", {
+      "key": settings.RAZORPAY_KEY_ID,
+      "order_id": payment.razorpay_order_id,
+      "amount": to_paise(payment.amount),  
+      "currency": "INR",
+      "name": "Kosh",
+      "description": f"Advance for {po.number} - {po.supplier_profile.company_name}",
+      "prefill": {"name": profile_name, "email": user.email},
+      "notes": {"purchase_order_id": str(po.pk)},
+      "purchase_order_id": str(po.pk),
+      "advance_due_by": po.advance_due_by,
+    })
+
+@po_advance_verify_docs
+class AdvancePaymentVerifyApi(APIView):
+  permission_classes = [HasBusinessAccess, IsOwner]
+  throttle_classes = [OrderWriteThrottle]
+
+  def post(self, request, pk):
+    serializer = AdvanceVerifySerializer(data=request.data)
+    if not serializer.is_valid():
+      return validation_error_response(serializer)
+    data = serializer.validated_data
+    try:
+      po = verify_advance_payment(
+        request.business, pk,
+        data["razorpay_order_id"], data["razorpay_payment_id"], data["razorpay_signature"],
+      )
+    except PaymentError as err:
+      return po_error_response(err)
+
+    po = PurchaseOrder.objects.select_related("supplier_profile", "rfq").get(pk=po.pk)
+    if po.status == PurchaseOrder.Status.ISSUED:
+      message = "Advance paid. The order has been sent to the supplier."
+    else:
+      message = "Payment received, but this order was already closed. It will be refunded."
+    return success_response(message, PurchaseOrderSummarySerializer(po).data)
+
+
+@extend_schema(exclude=True)
+class RazorpayWebhookApi(APIView):
+  authentication_classes = []
+  permission_classes = [AllowAny]
+  throttle_classes = []
+
+  def post(self, request):
+    raw = request.body 
+    signature = request.headers.get("X-Razorpay-Signature", "")
+    try:
+      result = handle_webhook(raw, signature)
+    except WebhookError:
+      return Response({"detail": "invalid signature"}, status=status.HTTP_400_BAD_REQUEST)
+    except PaymentError as err:
+      if err.code == "GATEWAY_ERROR":
+        return Response({"detail": "retry"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+      logger.error("Razorpay webhook not applied: %s (%s)", err.message, err.code)
+      return Response({"status": "logged"})
+    except Exception:
+      logger.exception("Razorpay webhook crashed")
+      return Response({"detail": "error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    return Response({"status": result})
 @po_cancel_docs
 class PurchaseOrderCancelApi(APIView):
   permission_classes = [HasBusinessAccess, IsOwner]

@@ -1,3 +1,4 @@
+import logging
 from datetime import timedelta
 
 from celery import shared_task
@@ -7,11 +8,8 @@ from accounts.models import Business
 from notifications import events
 
 from .alert_services import create_alerts_for_business
-
-import logging
-
-from .models import RFQ, ReorderSuggestion, PurchaseOrder
-from .po_services import expire_unpaid_order
+from .models import RFQ, PurchaseOrder, ReorderSuggestion
+from .payment_services import PaymentError, expire_advance, refund_payment
 from .rfq_services import RFQCreationError, create_rfqs_for_suggestions
 
 logger = logging.getLogger(__name__)
@@ -107,8 +105,16 @@ def cancel_expired_unpaid_orders():
   cancelled = 0
   for po_id in ids:
     try:
-      if expire_unpaid_order(po_id):
+      if expire_advance(po_id):
         cancelled += 1
     except Exception:
       logger.exception("Could not expire order %s", po_id)
   return cancelled
+
+
+@shared_task(bind=True, max_retries=6, default_retry_delay=600)
+def refund_advance_payment(self, payment_pk):
+  try:
+    return refund_payment(payment_pk)
+  except PaymentError as err:
+    raise self.retry(exc=err)
