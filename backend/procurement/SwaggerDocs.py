@@ -14,7 +14,7 @@ from accounts.swagger import (
   UNAUTHORIZED_RESPONSE,
 )
 
-from .serializers import QuotationSubmitSerializer, RFQUpdateSerializer, RFQCreateSerializer, RFQUpdateSerializer, BulkRFQCreateSerializer
+from .serializers import QuotationSubmitSerializer, RFQUpdateSerializer, RFQCreateSerializer, RFQUpdateSerializer, BulkRFQCreateSerializer, DispatchSerializer
 
 
 RFQ_ITEMS_EXAMPLE = [
@@ -1494,6 +1494,142 @@ supplier_po_detail_docs = extend_schema_view(
       401: UNAUTHORIZED_RESPONSE,
       403: NOT_SUPPLIER_RESPONSE,
       404: PO_DETAIL_NOT_FOUND_RESPONSE,
+    },
+  ),
+)
+
+SHIPMENT_EXAMPLE = {
+  "id": "7c4e1a92-5d08-4b36-9f21-a3e8d6c0b715",
+  "dispatched_at": "2026-10-14T09:30:00Z",
+  "expected_delivery_date": "2026-10-17",
+  "tracking_note": "Truck DL1C 4567",
+  "is_late": True,
+  "late_by_days": 2,
+  "items": [
+    {
+      "purchase_order_item_id": "5b8e2c71-3d94-4f06-a1c7-9e0d6b3f8a24",
+      "product_name": "Amul Dahi",
+      "sku": "SKU-787328",
+      "ordered_quantity": 70,
+      "quantity": 70,
+    },
+    {
+      "purchase_order_item_id": "d9a3f6b0-2e17-4c85-8b4d-1f7a0e5c9d32",
+      "product_name": "Amul Milk 1L",
+      "sku": "SKU-202",
+      "ordered_quantity": 70,
+      "quantity": 40,
+    },
+  ],
+}
+
+INVOICE_SUMMARY_EXAMPLE = {
+  "id": "e1b7c3a5-9f02-4d68-a4e1-6c0d8b2f7a93",
+  "number": "INV-0001",
+  "status": "unpaid",
+  "issue_date": "2026-10-14",
+  "purchase_order_id": "2f6b9d04-7c1e-4a83-b5f2-9e0d3a8c6b17",
+  "subtotal": "3140.00",
+  "tax_total": "157.00",
+  "grand_total": "3297.00",
+  "advance_applied": "1000.00",
+  "balance_due": "2297.00",
+}
+
+ORDER_NOT_FOUND_FOR_SUPPLIER_RESPONSE = resp(
+  "No such order for this supplier, or the order is not `issued` or later yet.",
+  err_example("Not Found", "Order not found.", "ORDER_NOT_FOUND"),
+)
+
+supplier_po_dispatch_docs = extend_schema_view(
+  post=extend_schema(
+    operation_id="procurement_supplier_orders_dispatch",
+    summary="Supplier: Mark Order Dispatched",
+    description=(
+      "The supplier marks an `issued` order as dispatched. In one step the server "
+      "creates the shipment, generates the invoice automatically and changes the "
+      "order status to `dispatched`. The owner is notified, and told which products "
+      "are short if less than ordered was sent. There is one shipment per order, so "
+      "this can be done only once.\n\n"
+      "- `items`: optional. One entry per order line, with the line's `id` from "
+      "Supplier: Get Order as `purchase_order_item` and the units sent as `quantity`. "
+      "The screen pre-fills the ordered quantities and the supplier may lower them, "
+      "never raise them. A line with 0 or a line left out is not dispatched and not "
+      "invoiced. At least one unit must be sent. If `items` is left out, everything "
+      "is dispatched as ordered.\n"
+      "- `expected_delivery_date`: optional, `YYYY-MM-DD`, today or later. Defaults to "
+      "the order's `delivery_date`. A date later than the order's is allowed and is "
+      "shown to the owner as late (`is_late`, `late_by_days`).\n"
+      "- `tracking_note`: optional, up to 255 characters, for a vehicle or tracking "
+      "number.\n\n"
+      "The invoice is calculated by the server from the dispatched quantities, the "
+      "order's unit prices and GST. `advance_applied` is the advance already paid "
+      "(never more than the invoice total) and `balance_due` is what is left to pay "
+      "after delivery. " + SUPPLIER_PO_NOTE + " Accepts JSON; the body may be empty."
+    ),
+    request=DispatchSerializer,
+    examples=[
+      OpenApiExample("Dispatch Everything", value={}, request_only=True),
+      OpenApiExample(
+        "Partial Dispatch",
+        value={
+          "items": [
+            {"purchase_order_item": "5b8e2c71-3d94-4f06-a1c7-9e0d6b3f8a24", "quantity": 70},
+            {"purchase_order_item": "d9a3f6b0-2e17-4c85-8b4d-1f7a0e5c9d32", "quantity": 40},
+          ],
+          "expected_delivery_date": "2026-10-17",
+          "tracking_note": "Truck DL1C 4567",
+        },
+        request_only=True,
+      ),
+    ],
+    responses={
+      201: resp(
+        "Order dispatched, invoice generated.",
+        ok_example(
+          "Dispatched",
+          "Order marked as dispatched. Invoice generated.",
+          data={"shipment": SHIPMENT_EXAMPLE, "invoice": INVOICE_SUMMARY_EXAMPLE},
+        ),
+      ),
+      400: resp(
+        "Validation error, or the quantities are not allowed.",
+        err_example("Duplicate Item", "Validation failed.", "VALIDATION_ERROR", errors={
+          "items": ["Each order item can appear only once."],
+        }),
+        err_example("Invalid Item Id", "Validation failed.", "VALIDATION_ERROR", errors={
+          "items": [{"purchase_order_item": ["Must be a valid UUID."]}],
+        }),
+        err_example("Invalid Date", "Validation failed.", "VALIDATION_ERROR", errors={
+          "expected_delivery_date": [
+            "Date has wrong format. Use one of these formats instead: YYYY-MM-DD."
+          ],
+        }),
+        err_example(
+          "Not In Order", "One of the items is not part of this order.", "INVALID_ITEM",
+        ),
+        err_example(
+          "More Than Ordered",
+          "You can't dispatch more than ordered: 70 units of Amul Milk 1L.",
+          "QUANTITY_TOO_HIGH",
+        ),
+        err_example("Nothing Sent", "Dispatch at least one item.", "NOTHING_TO_DISPATCH"),
+        err_example(
+          "Date In Past",
+          "The expected delivery date can't be in the past.",
+          "EXPECTED_DATE_IN_PAST",
+        ),
+      ),
+      401: UNAUTHORIZED_RESPONSE,
+      403: NOT_SUPPLIER_RESPONSE,
+      404: ORDER_NOT_FOUND_FOR_SUPPLIER_RESPONSE,
+      409: resp(
+        "The order was already dispatched.",
+        err_example(
+          "Already Dispatched", "This order has already been dispatched.", "ALREADY_DISPATCHED",
+        ),
+      ),
+      429: THROTTLED_RESPONSE,
     },
   ),
 )

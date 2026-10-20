@@ -23,5 +23,6 @@ urlpatterns = [
   path("orders/<uuid:pk>/", views.PurchaseOrderDetailApi.as_view(), name="order-detail"),
   path("supplier/orders/", views.SupplierPurchaseOrderListApi.as_view(), name="supplier-order-list"),
   path("supplier/orders/<uuid:pk>/", views.SupplierPurchaseOrderDetailApi.as_view(), name="supplier-order-detail"),
+  path("supplier/orders/<uuid:pk>/dispatch/", views.SupplierPurchaseOrderDispatchApi.as_view(), name="supplier-order-dispatch"),
   
 ]

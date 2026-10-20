@@ -13,6 +13,9 @@ from .models import (
     ReorderSuggestion, 
     PurchaseOrder, 
     PurchaseOrderItem,
+    Shipment,
+    ShipmentItem,
+    Invoice,
 )
 from .services import calculate_totals
 
@@ -533,3 +536,60 @@ class PurchaseOrderDetailSerializer(PurchaseOrderListSerializer):
       "owner_name": getattr(getattr(owner, "profile", None), "name", None) or None,
       "email": owner.email,
     }
+
+class DispatchItemInputSerializer(serializers.Serializer):
+  purchase_order_item = serializers.UUIDField()
+  quantity = serializers.IntegerField(min_value=0, max_value=1_000_000)
+
+
+class DispatchSerializer(serializers.Serializer):
+  items = DispatchItemInputSerializer(many=True, required=False, allow_empty=False)
+  expected_delivery_date = serializers.DateField(required=False)
+  tracking_note = serializers.CharField(
+    max_length=255, required=False, allow_blank=True, default=""
+  )
+
+  def validate_tracking_note(self, value):
+    return value.strip()
+
+  def validate_items(self, items):
+    ids = [line["purchase_order_item"] for line in items]
+    if len(ids) != len(set(ids)):
+      raise serializers.ValidationError("Each order item can appear only once.")
+    return items
+
+
+class ShipmentItemSerializer(serializers.ModelSerializer):
+  purchase_order_item_id = serializers.UUIDField(read_only=True)
+  product_name = serializers.CharField(source="purchase_order_item.product_name", read_only=True)
+  sku = serializers.CharField(source="purchase_order_item.sku", read_only=True)
+  ordered_quantity = serializers.IntegerField(source="purchase_order_item.quantity", read_only=True)
+
+  class Meta:
+    model = ShipmentItem
+    fields = ["purchase_order_item_id", "product_name", "sku", "ordered_quantity", "quantity"]
+    read_only_fields = fields
+
+
+class ShipmentSerializer(serializers.ModelSerializer):
+  items = ShipmentItemSerializer(many=True, read_only=True)
+
+  class Meta:
+    model = Shipment
+    fields = [
+      "id", "dispatched_at", "expected_delivery_date", "tracking_note",
+      "is_late", "late_by_days", "items",
+    ]
+    read_only_fields = fields
+
+
+class InvoiceSummarySerializer(serializers.ModelSerializer):
+  purchase_order_id = serializers.UUIDField(read_only=True)
+
+  class Meta:
+    model = Invoice
+    fields = [
+      "id", "number", "status", "issue_date", "purchase_order_id",
+      "subtotal", "tax_total", "grand_total", "advance_applied", "balance_due",
+    ]
+    read_only_fields = fields
