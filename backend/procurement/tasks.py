@@ -7,8 +7,12 @@ from accounts.models import Business
 from notifications import events
 
 from .alert_services import create_alerts_for_business
-from .models import RFQ, ReorderSuggestion
+from .models import RFQ, ReorderSuggestion, PurchaseOrder
 from .rfq_services import RFQCreationError, create_rfqs_for_suggestions
+import logging
+from .payment_services import PaymentError, expire_advance, refund_payment
+
+logger = logging.getLogger(__name__)
 
 REMINDER_HOURS = 6
 
@@ -89,3 +93,28 @@ def notify_rfq_deadlines_passed():
   for rfq in rfqs:
     events.rfq_quotes_ready(rfq)
   return len(rfqs)
+
+
+@shared_task
+def expire_unpaid_advances():
+  due = list(
+    PurchaseOrder.objects.filter(
+      status=PurchaseOrder.Status.AWAITING_ADVANCE,
+      advance_due_by__lte=timezone.now(),
+    ).values_list("pk", flat=True)
+  )
+  cancelled = 0
+  for po_id in due:
+    try:
+      cancelled += int(expire_advance(po_id))
+    except Exception:
+      logger.exception("Couldn't expire advance for PO %s", po_id)
+  return cancelled
+
+
+@shared_task(bind=True, max_retries=6, default_retry_delay=600)
+def refund_advance_payment(self, payment_pk):
+  try:
+    return refund_payment(payment_pk)
+  except PaymentError as err:
+    raise self.retry(exc=err)

@@ -18,5 +18,7 @@ urlpatterns = [
   path("alerts/<uuid:pk>/dismiss/", views.ReorderAlertDismissApi.as_view(), name="reorder-alert-dismiss"),
   path("alerts/refresh/", views.ReorderAlertRefreshApi.as_view(), name="reorder-alert-refresh"),
   path("quotations/<uuid:pk>/accept/", views.QuotationAcceptApi.as_view(), name="quotation-accept"),
-  
+  path("payments/razorpay/webhook/", views.RazorpayWebhookApi.as_view(), name="razorpay-webhook"),
+  path("purchase-orders/<uuid:pk>/advance/", views.AdvancePaymentApi.as_view(), name="po-advance"),
+  path("purchase-orders/<uuid:pk>/advance/verify/", views.AdvancePaymentVerifyApi.as_view(), name="po-advance-verify"),
 ]
