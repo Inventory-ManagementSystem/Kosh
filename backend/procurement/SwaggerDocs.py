@@ -14,7 +14,7 @@ from accounts.swagger import (
   UNAUTHORIZED_RESPONSE,
 )
 
-from .serializers import QuotationSubmitSerializer, RFQUpdateSerializer, RFQCreateSerializer, RFQUpdateSerializer, BulkRFQCreateSerializer, AdvanceVerifySerializer
+from .serializers import QuotationSubmitSerializer, RFQUpdateSerializer, RFQCreateSerializer, RFQUpdateSerializer, BulkRFQCreateSerializer, AdvanceVerifySerializer, DispatchSerializer
 
 
 RFQ_ITEMS_EXAMPLE = [
@@ -311,24 +311,25 @@ rfq_cancel_docs = extend_schema_view(
     operation_id="procurement_rfqs_cancel",
     summary="Cancel RFQ",
     description=(
-      "Cancels an RFQ so suppliers can no longer send quotations. Only an RFQ whose "
-      "status is `open` can be cancelled; an awarded, closed or already cancelled "
-      "RFQ returns a 400. The RFQ stays in the list with status `cancelled`, so the "
-      "history is kept. If it was created from a low-stock alert, the alert goes "
-      "back to `open`, so the owner can create a new RFQ from it. For a product with "
-      "enough dispatch history, the nightly check creates a new RFQ automatically "
-      "unless the alert is dismissed. Suppliers who had not declined get an in-app "
-      "notification. No request body is needed. A cancelled RFQ cannot be reopened. "
-      + OWNER_NOTE
+      "Cancels an RFQ so suppliers can no longer send quotations. An RFQ whose "
+      "status is `open`, or `closed` (the deadline passed and nobody was chosen), "
+      "can be cancelled; an awarded or already cancelled RFQ returns a 400. The RFQ "
+      "stays in the list with status `cancelled`, so the history is kept. If it was "
+      "created from a low-stock alert, the alert goes back to `open`, so the owner "
+      "can create a new RFQ from it. For a product with enough dispatch history, the "
+      "nightly check creates a new RFQ automatically unless the alert is dismissed. "
+      "Suppliers who had not declined get an in-app notification. No request body is "
+      "needed. A cancelled RFQ cannot be reopened. To undo an accepted quotation "
+      "whose advance is unpaid, cancel the order instead. " + OWNER_NOTE
     ),
     request=None,
     responses={
       200: resp("RFQ cancelled.", ok_example("Cancelled", "RFQ cancelled.")),
       400: resp(
-        "The RFQ is not open.",
+        "The RFQ is awarded or already cancelled.",
         err_example(
-          "Not Open",
-          "Only an open RFQ can be cancelled.",
+          "Not Open Or Closed",
+          "Only an open or closed RFQ can be cancelled.",
           "RFQ_NOT_OPEN",
         ),
       ),
@@ -1422,6 +1423,336 @@ po_advance_verify_docs = extend_schema_view(
           "razorpay_order_id": "order_PZ3k8sQm1vXy2a",
           "razorpay_payment_id": "pay_PZ3lQw7tN4bR9c",
           "razorpay_signature": "9ef4dffbfd84f1318f6739a3ce19f9d85851857ae648f114332d8401e0949a3d",
+  "No such order in this business. An order that belongs to another business "
+  "also returns this.",
+  err_example("Not Found", "Order not found.", "ORDER_NOT_FOUND"),
+)
+
+PURCHASE_ORDER_CANCELLED_EXAMPLE = {
+  **PURCHASE_ORDER_EXAMPLE,
+  "status": "cancelled",
+}
+
+po_cancel_docs = extend_schema_view(
+  post=extend_schema(
+    operation_id="procurement_orders_cancel",
+    summary="Cancel Unpaid Order",
+    description=(
+      "Cancels an order that is still `awaiting_advance`, that is, a quotation was "
+      "accepted but the advance has not been paid. The order becomes `cancelled`, "
+      "the quotation goes back to `submitted` and the RFQ is reopened (`open`, or "
+      "`closed` if its deadline has already passed), so the owner can accept a "
+      "quotation again. Suppliers are not notified because they never saw the order. "
+      "An order that is already `issued` or later cannot be cancelled here, and "
+      "neither can an order whose advance payment has already been received. "
+      "The server also cancels unpaid orders automatically once `advance_due_by` "
+      "has passed. No request body is needed. " + OWNER_NOTE
+    ),
+    request=None,
+    responses={
+      200: resp(
+        "Order cancelled.",
+        ok_example(
+          "Cancelled",
+          "Order cancelled. The quotation can be accepted again.",
+          data=PURCHASE_ORDER_CANCELLED_EXAMPLE,
+        ),
+      ),
+      401: UNAUTHORIZED_RESPONSE,
+      403: OWNER_ONLY_RESPONSE,
+      404: PO_NOT_FOUND_RESPONSE,
+      409: resp(
+        "The order can't be cancelled.",
+        err_example(
+          "Not Cancellable",
+          "Only an order that is waiting for its advance can be cancelled.",
+          "ORDER_NOT_CANCELLABLE",
+        ),
+        err_example(
+          "Payment Received",
+          "The advance has already been paid, so this order can't be cancelled here.",
+          "PAYMENT_RECEIVED",
+        ),
+      ),
+      429: THROTTLED_RESPONSE,
+    },
+  ),
+)
+
+PO_ITEM_EXAMPLE = {
+  "id": "5b8e2c71-3d94-4f06-a1c7-9e0d6b3f8a24",
+  "product_id": "5d0c7e91-4b3a-4a28-8f16-c2e9a7b1d054",
+  "product_name": "Amul Dahi",
+  "sku": "SKU-787328",
+  "image": "https://example-bucket.s3.amazonaws.com/products/dahi.jpg",
+  "category": "Dairy",
+  "supply_category": "Dairy",
+  "quantity": 70,
+  "unit_price": "42.00",
+  "gst_rate": "5.00",
+  "line_subtotal": "2940.00",
+  "line_tax": "147.00",
+  "line_total": "3087.00",
+}
+
+PURCHASE_ORDER_LIST_ITEM_EXAMPLE = {
+  **PURCHASE_ORDER_NO_ADVANCE_EXAMPLE,
+  "item_count": 2,
+  "total_quantity": 140,
+  "dispatch_date": None,
+  "expected_delivery_date": "2026-10-15",
+  "is_late": False,
+  "late_by_days": 0,
+}
+
+PURCHASE_ORDER_DETAIL_EXAMPLE = {
+  **PURCHASE_ORDER_LIST_ITEM_EXAMPLE,
+  "cancelled_at": None,
+  "advance_paid": False,
+  "supplier": {
+    "company_name": "Sharma Traders",
+    "phone": "9876543210",
+    "email": "sharma@example.com",
+    "address": "12 Industrial Area",
+    "city": "Ghaziabad",
+    "gstin": "09ABCDE1234F1Z5",
+  },
+  "buyer": {
+    "business_name": "Gupta Kirana",
+    "business_type": "Retail",
+    "city": "Delhi",
+    "owner_name": "Ramesh Gupta",
+    "email": "ramesh@example.com",
+  },
+  "items": [PO_ITEM_EXAMPLE],
+  "shipment": None,
+  "invoice": None,
+}
+
+PO_PAGE_NOT_FOUND_RESPONSE = resp(
+  "The page number is out of range.",
+  err_example("Invalid Page", "Invalid page.", "NOT_FOUND"),
+)
+
+PO_DETAIL_NOT_FOUND_RESPONSE = resp(
+  "No such order for this user. An order that belongs to someone else also "
+  "returns this.",
+  err_example("Not Found", "No PurchaseOrder matches the given query.", "NOT_FOUND"),
+)
+
+PO_FIELDS_NOTE = (
+  "`status` is `awaiting_advance` (accepted, advance not paid yet), `issued` (the "
+  "supplier can see it), `dispatched`, `partially_received`, `received` or "
+  "`cancelled`. `balance_amount` is the grand total minus the advance, due after "
+  "delivery. `dispatch_date` is when the supplier dispatched the order (null until "
+  "then). `expected_delivery_date` is the supplier's current expected date once "
+  "dispatched, otherwise the order's `delivery_date`. `is_late` is true when the "
+  "order is past its `delivery_date` before dispatch, or when the supplier set an "
+  "expected date later than it at dispatch; `late_by_days` says by how many days. "
+  "In the order detail, `shipment` and `invoice` are null until the order is "
+  "dispatched; after that they have the same shape as in Supplier: Mark Order "
+  "Dispatched."
+)
+
+po_list_docs = extend_schema_view(
+  get=extend_schema(
+    operation_id="procurement_orders_list",
+    summary="List Orders",
+    description=(
+      "Returns the purchase orders of the logged-in user's business, newest first, "
+      "paginated. " + PO_FIELDS_NOTE + " " + ACCESS_NOTE
+    ),
+    parameters=[
+      OpenApiParameter(
+        "status", OpenApiTypes.STR, OpenApiParameter.QUERY,
+        description=(
+          "Filter by `status`. Any value that is not a status is ignored and all "
+          "orders are returned."
+        ),
+      ),
+      *PAGE_PARAMETERS,
+    ],
+    responses={
+      200: resp(
+        "Paginated order list.",
+        ok_example("Orders", "Orders fetched.", data=paginated(PURCHASE_ORDER_LIST_ITEM_EXAMPLE)),
+        ok_example("No Orders", "Orders fetched.", data=paginated()),
+      ),
+      401: UNAUTHORIZED_RESPONSE,
+      403: FORBIDDEN_RESPONSE,
+      404: PO_PAGE_NOT_FOUND_RESPONSE,
+    },
+  ),
+)
+
+po_detail_docs = extend_schema_view(
+  get=extend_schema(
+    operation_id="procurement_orders_retrieve",
+    summary="Get Order",
+    description=(
+      "Returns one purchase order with everything the Track Order screen needs: "
+      "the `items` (each with the product `image`, `category` and `supply_category`, "
+      "which are read from the product and can be null), the `supplier` contact "
+      "details and the `buyer` details. `advance_paid` is true once the advance "
+      "payment has been received. " + PO_FIELDS_NOTE + " " + ACCESS_NOTE
+    ),
+    responses={
+      200: resp(
+        "Order details.",
+        ok_example("Order", "Order fetched.", data=PURCHASE_ORDER_DETAIL_EXAMPLE),
+      ),
+      401: UNAUTHORIZED_RESPONSE,
+      403: FORBIDDEN_RESPONSE,
+      404: PO_DETAIL_NOT_FOUND_RESPONSE,
+    },
+  ),
+)
+
+SUPPLIER_PO_NOTE = (
+  "Supplier only. A supplier sees only their own orders, and only once an order is "
+  "`issued` or later; an order that is `awaiting_advance` or `cancelled` is not listed "
+  "and returns a 404."
+)
+
+supplier_po_list_docs = extend_schema_view(
+  get=extend_schema(
+    operation_id="procurement_supplier_orders_list",
+    summary="Supplier: List My Orders",
+    description=(
+      "The supplier's purchase orders, newest first, paginated. "
+      + PO_FIELDS_NOTE + " " + SUPPLIER_PO_NOTE
+    ),
+    parameters=[
+      OpenApiParameter(
+        "status", OpenApiTypes.STR, OpenApiParameter.QUERY,
+        description=(
+          "Filter by `status`: `issued`, `dispatched`, `partially_received` or "
+          "`received`. Any other value is ignored."
+        ),
+      ),
+      *PAGE_PARAMETERS,
+    ],
+    responses={
+      200: resp(
+        "Paginated order list.",
+        ok_example(
+          "Orders", "Orders fetched.",
+          data=paginated({
+            **PURCHASE_ORDER_LIST_ITEM_EXAMPLE,
+            "business_name": "Gupta Kirana",
+            "business_city": "Delhi",
+          }),
+        ),
+        ok_example("No Orders", "Orders fetched.", data=paginated()),
+      ),
+      401: UNAUTHORIZED_RESPONSE,
+      403: NOT_SUPPLIER_RESPONSE,
+      404: PO_PAGE_NOT_FOUND_RESPONSE,
+    },
+  ),
+)
+
+supplier_po_detail_docs = extend_schema_view(
+  get=extend_schema(
+    operation_id="procurement_supplier_orders_retrieve",
+    summary="Supplier: Get Order",
+    description=(
+      "One purchase order with its items, the buyer's details and the supplier's "
+      "own details. " + PO_FIELDS_NOTE + " " + SUPPLIER_PO_NOTE
+    ),
+    responses={
+      200: resp(
+        "Order details.",
+        ok_example("Order", "Order fetched.", data=PURCHASE_ORDER_DETAIL_EXAMPLE),
+      ),
+      401: UNAUTHORIZED_RESPONSE,
+      403: NOT_SUPPLIER_RESPONSE,
+      404: PO_DETAIL_NOT_FOUND_RESPONSE,
+    },
+  ),
+)
+
+SHIPMENT_EXAMPLE = {
+  "id": "7c4e1a92-5d08-4b36-9f21-a3e8d6c0b715",
+  "dispatched_at": "2026-10-14T09:30:00Z",
+  "expected_delivery_date": "2026-10-17",
+  "tracking_note": "Truck DL1C 4567",
+  "is_late": True,
+  "late_by_days": 2,
+  "items": [
+    {
+      "purchase_order_item_id": "5b8e2c71-3d94-4f06-a1c7-9e0d6b3f8a24",
+      "product_name": "Amul Dahi",
+      "sku": "SKU-787328",
+      "ordered_quantity": 70,
+      "quantity": 70,
+    },
+    {
+      "purchase_order_item_id": "d9a3f6b0-2e17-4c85-8b4d-1f7a0e5c9d32",
+      "product_name": "Amul Milk 1L",
+      "sku": "SKU-202",
+      "ordered_quantity": 70,
+      "quantity": 40,
+    },
+  ],
+}
+
+INVOICE_SUMMARY_EXAMPLE = {
+  "id": "e1b7c3a5-9f02-4d68-a4e1-6c0d8b2f7a93",
+  "number": "INV-0001",
+  "status": "unpaid",
+  "issue_date": "2026-10-14",
+  "purchase_order_id": "2f6b9d04-7c1e-4a83-b5f2-9e0d3a8c6b17",
+  "subtotal": "3140.00",
+  "tax_total": "157.00",
+  "grand_total": "3297.00",
+  "advance_applied": "1000.00",
+  "balance_due": "2297.00",
+}
+
+ORDER_NOT_FOUND_FOR_SUPPLIER_RESPONSE = resp(
+  "No such order for this supplier, or the order is not `issued` or later yet.",
+  err_example("Not Found", "Order not found.", "ORDER_NOT_FOUND"),
+)
+
+supplier_po_dispatch_docs = extend_schema_view(
+  post=extend_schema(
+    operation_id="procurement_supplier_orders_dispatch",
+    summary="Supplier: Mark Order Dispatched",
+    description=(
+      "The supplier marks an `issued` order as dispatched. In one step the server "
+      "creates the shipment, generates the invoice automatically and changes the "
+      "order status to `dispatched`. The owner is notified, and told which products "
+      "are short if less than ordered was sent. There is one shipment per order, so "
+      "this can be done only once.\n\n"
+      "- `items`: optional. One entry per order line, with the line's `id` from "
+      "Supplier: Get Order as `purchase_order_item` and the units sent as `quantity`. "
+      "The screen pre-fills the ordered quantities and the supplier may lower them, "
+      "never raise them. A line with 0 or a line left out is not dispatched and not "
+      "invoiced. At least one unit must be sent. If `items` is left out, everything "
+      "is dispatched as ordered.\n"
+      "- `expected_delivery_date`: optional, `YYYY-MM-DD`, today or later. Defaults to "
+      "the order's `delivery_date`. A date later than the order's is allowed and is "
+      "shown to the owner as late (`is_late`, `late_by_days`).\n"
+      "- `tracking_note`: optional, up to 255 characters, for a vehicle or tracking "
+      "number.\n\n"
+      "The invoice is calculated by the server from the dispatched quantities, the "
+      "order's unit prices and GST. `advance_applied` is the advance already paid "
+      "(never more than the invoice total) and `balance_due` is what is left to pay "
+      "after delivery. " + SUPPLIER_PO_NOTE + " Accepts JSON; the body may be empty."
+    ),
+    request=DispatchSerializer,
+    examples=[
+      OpenApiExample("Dispatch Everything", value={}, request_only=True),
+      OpenApiExample(
+        "Partial Dispatch",
+        value={
+          "items": [
+            {"purchase_order_item": "5b8e2c71-3d94-4f06-a1c7-9e0d6b3f8a24", "quantity": 70},
+            {"purchase_order_item": "d9a3f6b0-2e17-4c85-8b4d-1f7a0e5c9d32", "quantity": 40},
+          ],
+          "expected_delivery_date": "2026-10-17",
+          "tracking_note": "Truck DL1C 4567",
         },
         request_only=True,
       ),
@@ -1477,6 +1808,211 @@ po_advance_verify_docs = extend_schema_view(
       429: THROTTLED_RESPONSE,
       502: GATEWAY_ERROR_RESPONSE,
       503: PAYMENTS_OFF_RESPONSE,
+    },
+  ),
+)
+      201: resp(
+        "Order dispatched, invoice generated.",
+        ok_example(
+          "Dispatched",
+          "Order marked as dispatched. Invoice generated.",
+          data={"shipment": SHIPMENT_EXAMPLE, "invoice": INVOICE_SUMMARY_EXAMPLE},
+        ),
+      ),
+      400: resp(
+        "Validation error, or the quantities are not allowed.",
+        err_example("Duplicate Item", "Validation failed.", "VALIDATION_ERROR", errors={
+          "items": ["Each order item can appear only once."],
+        }),
+        err_example("Invalid Item Id", "Validation failed.", "VALIDATION_ERROR", errors={
+          "items": [{"purchase_order_item": ["Must be a valid UUID."]}],
+        }),
+        err_example("Invalid Date", "Validation failed.", "VALIDATION_ERROR", errors={
+          "expected_delivery_date": [
+            "Date has wrong format. Use one of these formats instead: YYYY-MM-DD."
+          ],
+        }),
+        err_example(
+          "Not In Order", "One of the items is not part of this order.", "INVALID_ITEM",
+        ),
+        err_example(
+          "More Than Ordered",
+          "You can't dispatch more than ordered: 70 units of Amul Milk 1L.",
+          "QUANTITY_TOO_HIGH",
+        ),
+        err_example("Nothing Sent", "Dispatch at least one item.", "NOTHING_TO_DISPATCH"),
+        err_example(
+          "Date In Past",
+          "The expected delivery date can't be in the past.",
+          "EXPECTED_DATE_IN_PAST",
+        ),
+      ),
+      401: UNAUTHORIZED_RESPONSE,
+      403: NOT_SUPPLIER_RESPONSE,
+      404: ORDER_NOT_FOUND_FOR_SUPPLIER_RESPONSE,
+      409: resp(
+        "The order was already dispatched.",
+        err_example(
+          "Already Dispatched", "This order has already been dispatched.", "ALREADY_DISPATCHED",
+        ),
+      ),
+      429: THROTTLED_RESPONSE,
+    },
+  ),
+)
+
+INVOICE_LIST_ITEM_EXAMPLE = {
+  **INVOICE_SUMMARY_EXAMPLE,
+  "po_number": "PO-0001",
+  "company_name": "Sharma Traders",
+  "business_name": "Gupta Kirana",
+  "item_count": 2,
+}
+
+INVOICE_DETAIL_EXAMPLE = {
+  **INVOICE_LIST_ITEM_EXAMPLE,
+  "created_at": "2026-10-14T09:30:00Z",
+  "supplier": PURCHASE_ORDER_DETAIL_EXAMPLE["supplier"],
+  "buyer": PURCHASE_ORDER_DETAIL_EXAMPLE["buyer"],
+  "shipment": {
+    "dispatched_at": "2026-10-14T09:30:00Z",
+    "expected_delivery_date": "2026-10-17",
+    "is_late": True,
+    "late_by_days": 2,
+    "tracking_note": "Truck DL1C 4567",
+  },
+  "items": [
+    {
+      "id": "a4c8e2d6-1b37-4f90-8d52-7e0b3a9c6f14",
+      "product_name": "Amul Dahi",
+      "sku": "SKU-787328",
+      "quantity": 70,
+      "unit_price": "42.00",
+      "gst_rate": "5.00",
+      "line_subtotal": "2940.00",
+      "line_tax": "147.00",
+      "line_total": "3087.00",
+    },
+    {
+      "id": "3f9b5d1a-6c42-4e78-a0d3-8b2e7c4f1a65",
+      "product_name": "Amul Milk 1L",
+      "sku": "SKU-202",
+      "quantity": 40,
+      "unit_price": "30.00",
+      "gst_rate": "5.00",
+      "line_subtotal": "1200.00",
+      "line_tax": "60.00",
+      "line_total": "1260.00",
+    },
+  ],
+}
+
+INVOICE_NOTE = (
+  "Invoices are generated automatically when the supplier marks an order as "
+  "dispatched; nobody types them. The invoice is the supplier's bill, issued to "
+  "the buyer, and covers only the quantities dispatched. `advance_applied` is the "
+  "advance already paid on the order and `balance_due` is what is left to pay after "
+  "delivery. `status` is `unpaid` or `paid`. Numbers run per supplier (INV-0001, "
+  "INV-0002, ...)."
+)
+
+INVOICE_NOT_FOUND_RESPONSE = resp(
+  "No such invoice for this user. An invoice that belongs to someone else also "
+  "returns this.",
+  err_example("Not Found", "No Invoice matches the given query.", "NOT_FOUND"),
+)
+
+INVOICE_PAGE_NOT_FOUND_RESPONSE = resp(
+  "The page number is out of range.",
+  err_example("Invalid Page", "Invalid page.", "NOT_FOUND"),
+)
+
+STATUS_FILTER_PARAMETER = OpenApiParameter(
+  "status", OpenApiTypes.STR, OpenApiParameter.QUERY,
+  description="`unpaid` or `paid`. Any other value is ignored and all invoices are returned.",
+)
+
+invoice_list_docs = extend_schema_view(
+  get=extend_schema(
+    operation_id="procurement_invoices_list",
+    summary="List Invoices",
+    description=(
+      "Returns the invoices issued to the logged-in user's business, newest first, "
+      "paginated. " + INVOICE_NOTE + " " + ACCESS_NOTE
+    ),
+    parameters=[STATUS_FILTER_PARAMETER, *PAGE_PARAMETERS],
+    responses={
+      200: resp(
+        "Paginated invoice list.",
+        ok_example("Invoices", "Invoices fetched.", data=paginated(INVOICE_LIST_ITEM_EXAMPLE)),
+        ok_example("No Invoices", "Invoices fetched.", data=paginated()),
+      ),
+      401: UNAUTHORIZED_RESPONSE,
+      403: FORBIDDEN_RESPONSE,
+      404: INVOICE_PAGE_NOT_FOUND_RESPONSE,
+    },
+  ),
+)
+
+invoice_detail_docs = extend_schema_view(
+  get=extend_schema(
+    operation_id="procurement_invoices_retrieve",
+    summary="Get Invoice",
+    description=(
+      "Returns one invoice with its lines, the supplier (issuer) and buyer details "
+      "and the shipment dates. " + INVOICE_NOTE + " " + ACCESS_NOTE
+    ),
+    responses={
+      200: resp(
+        "Invoice details.",
+        ok_example("Invoice", "Invoice fetched.", data=INVOICE_DETAIL_EXAMPLE),
+      ),
+      401: UNAUTHORIZED_RESPONSE,
+      403: FORBIDDEN_RESPONSE,
+      404: INVOICE_NOT_FOUND_RESPONSE,
+    },
+  ),
+)
+
+supplier_invoice_list_docs = extend_schema_view(
+  get=extend_schema(
+    operation_id="procurement_supplier_invoices_list",
+    summary="Supplier: List My Invoices",
+    description=(
+      "The invoices the supplier has issued, newest first, paginated. "
+      + INVOICE_NOTE + " Supplier only; a supplier sees only their own invoices."
+    ),
+    parameters=[STATUS_FILTER_PARAMETER, *PAGE_PARAMETERS],
+    responses={
+      200: resp(
+        "Paginated invoice list.",
+        ok_example("Invoices", "Invoices fetched.", data=paginated(INVOICE_LIST_ITEM_EXAMPLE)),
+        ok_example("No Invoices", "Invoices fetched.", data=paginated()),
+      ),
+      401: UNAUTHORIZED_RESPONSE,
+      403: NOT_SUPPLIER_RESPONSE,
+      404: INVOICE_PAGE_NOT_FOUND_RESPONSE,
+    },
+  ),
+)
+
+supplier_invoice_detail_docs = extend_schema_view(
+  get=extend_schema(
+    operation_id="procurement_supplier_invoices_retrieve",
+    summary="Supplier: Get Invoice",
+    description=(
+      "One of the supplier's invoices with its lines, both parties' details and the "
+      "shipment dates. " + INVOICE_NOTE
+      + " Supplier only; an invoice of another supplier returns a 404."
+    ),
+    responses={
+      200: resp(
+        "Invoice details.",
+        ok_example("Invoice", "Invoice fetched.", data=INVOICE_DETAIL_EXAMPLE),
+      ),
+      401: UNAUTHORIZED_RESPONSE,
+      403: NOT_SUPPLIER_RESPONSE,
+      404: INVOICE_NOT_FOUND_RESPONSE,
     },
   ),
 )

@@ -16,10 +16,13 @@ from accounts.responses import error_response, success_response, validation_erro
 from accounts.swagger import UNAUTHORIZED_RESPONSE, ok_example, resp
 from suppliers.permissions import IsSupplier
 from django.db import transaction
-from notifications.models import Notification
-from notifications.services import notify_many
+from notifications import events
 from .alert_services import create_alerts_for_business
 from .ranking import WeightError, parse_weights, rank_quotations
+from .dispatch_services import mark_dispatched
+from notifications.models import Notification
+from notifications.services import notify_many
+
 
 from .SwaggerDocs import (
   reorder_alert_list_docs,
@@ -39,9 +42,21 @@ from .SwaggerDocs import (
   po_accept_docs,
   po_advance_docs,
   po_advance_verify_docs,
+  po_cancel_docs,
+  po_cancel_docs,
+  po_list_docs,
+  po_detail_docs,
+  supplier_po_list_docs,
+  supplier_po_detail_docs,
+  supplier_po_dispatch_docs,
+  invoice_list_docs,
+  invoice_detail_docs,
+  supplier_invoice_list_docs,
+  supplier_invoice_detail_docs,
+
 )
 
-from .models import RFQ, Quotation, RFQRecipient, ReorderSuggestion, PurchaseOrder
+from .models import RFQ, Quotation, RFQRecipient, ReorderSuggestion, PurchaseOrder, Shipment, Invoice
 from .serializers import (
   OwnerQuotationSerializer,
   QuotationSerializer,
@@ -55,6 +70,16 @@ from .serializers import (
   BulkRFQCreateSerializer, 
   RFQCreateSerializer,
   PurchaseOrderSummarySerializer,
+  PurchaseOrderSummarySerializer,
+  PurchaseOrderListSerializer,
+  PurchaseOrderDetailSerializer,
+  SupplierPurchaseOrderListSerializer,
+  DispatchSerializer,
+  ShipmentSerializer,
+  InvoiceSummarySerializer,
+  InvoiceListSerializer,
+  InvoiceDetailSerializer,
+
 )
 from .services import (
   QuotationError,
@@ -75,7 +100,7 @@ from .serializers import RFQCreateSerializer
 
 from .throttles import QuotationWriteThrottle, OrderWriteThrottle
 
-from .po_services import PurchaseOrderError, accept_quotation
+from .po_services import PurchaseOrderError, accept_quotation, cancel_unpaid_order
 
 import logging
 from django.conf import settings
@@ -138,8 +163,12 @@ class RFQDetailApi(APIView):
     rfq = self._get_rfq(request, pk)
     serializer = RFQUpdateSerializer(rfq, data=request.data, partial=True)
     serializer.is_valid(raise_exception=True)
+    before = {field: getattr(rfq, field) for field in ("deadline", "notes")}
     serializer.save()
     rfq = self._get_rfq(request, pk)  # reload with prefetches
+    changed = [field for field, old in before.items() if getattr(rfq, field) != old]
+    if changed:
+      events.rfq_updated(rfq, changed)
     return Response({
       "success": True,
       "message": "RFQ updated.",
@@ -151,20 +180,17 @@ class RFQCancelApi(APIView):
   permission_classes = [HasBusinessAccess, IsOwner]
 
   def post(self, request, pk):
-    rfq = get_object_or_404(RFQ, pk=pk, business=request.business)
-    if rfq.status != RFQ.Status.OPEN:
-      return Response(
-        {
-          "success": False,
-          "message": "Only an open RFQ can be cancelled.",
-          "code": "RFQ_NOT_OPEN",
-          "errors": None,
-          "details": None,
-        },
-        status=400,
-      )
-
     with transaction.atomic():
+      rfq = get_object_or_404(
+        RFQ.objects.select_for_update(), pk=pk, business=request.business
+      )
+      if rfq.status not in (RFQ.Status.OPEN, RFQ.Status.CLOSED):
+        return error_response(
+          "Only an open or closed RFQ can be cancelled.",
+          "RFQ_NOT_OPEN",
+          status=status.HTTP_400_BAD_REQUEST,
+        )
+
       rfq.status = RFQ.Status.CANCELLED
       rfq.save(update_fields=["status", "updated_at"])
 
@@ -229,7 +255,7 @@ class ReorderAlertRefreshApi(APIView):
   permission_classes = [HasBusinessAccess, IsOwner]
 
   def post(self, request):
-    created = create_alerts_for_business(request.business, notify=False)
+    created = create_alerts_for_business(request.business)
     active = ReorderSuggestion.objects.filter(
       business=request.business, status__in=ReorderSuggestion.ACTIVE
     ).count()
@@ -467,6 +493,7 @@ class ReorderAlertDismissApi(APIView):
 
 PO_ERROR_STATUS = {
   "QUOTATION_NOT_FOUND": 404,
+  "ORDER_NOT_FOUND": 404,
   "RFQ_ALREADY_AWARDED": 409,
   "RFQ_CANCELLED": 409,
   "QUOTATION_NOT_ACTIVE": 409,
@@ -482,6 +509,9 @@ PO_ERROR_STATUS = {
   "AMOUNT_MISMATCH": 400,
   "GATEWAY_ERROR": 502,
   "PAYMENTS_NOT_CONFIGURED": 503,
+  "ORDER_NOT_CANCELLABLE": 409,
+  "PAYMENT_RECEIVED": 409,
+  "ALREADY_DISPATCHED": 409,
 }
  
  
@@ -603,3 +633,180 @@ class RazorpayWebhookApi(APIView):
       logger.exception("Razorpay webhook crashed")
       return Response({"detail": "error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     return Response({"status": result})
+@po_cancel_docs
+class PurchaseOrderCancelApi(APIView):
+  permission_classes = [HasBusinessAccess, IsOwner]
+  throttle_classes = [OrderWriteThrottle]
+
+  def post(self, request, pk):
+    try:
+      po = cancel_unpaid_order(request.business, pk)
+    except PurchaseOrderError as err:
+      return po_error_response(err)
+
+    po = PurchaseOrder.objects.select_related("supplier_profile", "rfq").get(pk=po.pk)
+    return success_response(
+      "Order cancelled. The quotation can be accepted again.",
+      PurchaseOrderSummarySerializer(po).data,
+    )
+
+def po_queryset(base):
+  return (
+    base.select_related(
+      "rfq", "business__owner__profile", "supplier_profile__user", "shipment", "invoice"
+    )
+    .prefetch_related(
+      "items__product__category", "items__product__supply_category", "payments",
+      "shipment__items__purchase_order_item",
+    )
+  )
+
+
+@po_list_docs
+class PurchaseOrderListApi(APIView):
+  permission_classes = [HasBusinessAccess]
+
+  def get(self, request):
+    qs = po_queryset(PurchaseOrder.objects.filter(business=request.business))
+    status_param = request.query_params.get("status")
+    if status_param in PurchaseOrder.Status.values:
+      qs = qs.filter(status=status_param)
+    return paginated_response(request, qs, PurchaseOrderListSerializer, "Orders fetched.")
+
+
+@po_detail_docs
+class PurchaseOrderDetailApi(APIView):
+  permission_classes = [HasBusinessAccess]
+
+  def get(self, request, pk):
+    po = get_object_or_404(
+      po_queryset(PurchaseOrder.objects.filter(business=request.business)), pk=pk
+    )
+    return success_response(
+      "Order fetched.",
+      PurchaseOrderDetailSerializer(po, context={"request": request}).data,
+    )
+
+
+def supplier_po_base(supplier):
+  return PurchaseOrder.objects.filter(
+    supplier_profile=supplier, status__in=PurchaseOrder.SUPPLIER_VISIBLE
+  )
+
+
+@supplier_po_list_docs
+class SupplierPurchaseOrderListApi(APIView):
+  permission_classes = [IsAuthenticated, IsSupplier]
+
+  def get(self, request):
+    qs = po_queryset(supplier_po_base(request.supplier))
+    status_param = request.query_params.get("status")
+    if status_param in PurchaseOrder.SUPPLIER_VISIBLE:
+      qs = qs.filter(status=status_param)
+    return paginated_response(
+      request, qs, SupplierPurchaseOrderListSerializer, "Orders fetched."
+    )
+
+
+@supplier_po_detail_docs
+class SupplierPurchaseOrderDetailApi(APIView):
+  permission_classes = [IsAuthenticated, IsSupplier]
+
+  def get(self, request, pk):
+    po = get_object_or_404(po_queryset(supplier_po_base(request.supplier)), pk=pk)
+    return success_response(
+      "Order fetched.",
+      PurchaseOrderDetailSerializer(po, context={"request": request}).data,
+    )
+
+@supplier_po_dispatch_docs
+class SupplierPurchaseOrderDispatchApi(APIView):
+  permission_classes = [IsAuthenticated, IsSupplier]
+  throttle_classes = [OrderWriteThrottle]
+
+  def post(self, request, pk):
+    serializer = DispatchSerializer(data=request.data)
+    if not serializer.is_valid():
+      return validation_error_response(serializer)
+    data = serializer.validated_data
+
+    quantities = None
+    if "items" in data:
+      quantities = {
+        line["purchase_order_item"]: line["quantity"] for line in data["items"]
+      }
+
+    try:
+      shipment, invoice = mark_dispatched(
+        request.supplier,
+        pk,
+        request.user,
+        quantities=quantities,
+        expected_delivery_date=data.get("expected_delivery_date"),
+        tracking_note=data["tracking_note"],
+      )
+    except PurchaseOrderError as err:
+      return po_error_response(err)
+
+    shipment = Shipment.objects.prefetch_related("items__purchase_order_item").get(
+      pk=shipment.pk
+    )
+    return success_response(
+      "Order marked as dispatched. Invoice generated.",
+      {
+        "shipment": ShipmentSerializer(shipment).data,
+        "invoice": InvoiceSummarySerializer(invoice).data,
+      },
+      status=status.HTTP_201_CREATED,
+    )
+
+def invoice_queryset(base):
+  return base.select_related(
+    "purchase_order__shipment", "business__owner__profile", "supplier_profile__user"
+  ).prefetch_related("items")
+
+
+@invoice_list_docs
+class InvoiceListApi(APIView):
+  permission_classes = [HasBusinessAccess]
+
+  def get(self, request):
+    qs = invoice_queryset(Invoice.objects.filter(business=request.business))
+    status_param = request.query_params.get("status")
+    if status_param in Invoice.Status.values:
+      qs = qs.filter(status=status_param)
+    return paginated_response(request, qs, InvoiceListSerializer, "Invoices fetched.")
+
+
+@invoice_detail_docs
+class InvoiceDetailApi(APIView):
+  permission_classes = [HasBusinessAccess]
+
+  def get(self, request, pk):
+    invoice = get_object_or_404(
+      invoice_queryset(Invoice.objects.filter(business=request.business)), pk=pk
+    )
+    return success_response("Invoice fetched.", InvoiceDetailSerializer(invoice).data)
+
+
+@supplier_invoice_list_docs
+class SupplierInvoiceListApi(APIView):
+  permission_classes = [IsAuthenticated, IsSupplier]
+
+  def get(self, request):
+    qs = invoice_queryset(Invoice.objects.filter(supplier_profile=request.supplier))
+    status_param = request.query_params.get("status")
+    if status_param in Invoice.Status.values:
+      qs = qs.filter(status=status_param)
+    return paginated_response(request, qs, InvoiceListSerializer, "Invoices fetched.")
+
+
+@supplier_invoice_detail_docs
+class SupplierInvoiceDetailApi(APIView):
+  permission_classes = [IsAuthenticated, IsSupplier]
+
+  def get(self, request, pk):
+    invoice = get_object_or_404(
+      invoice_queryset(Invoice.objects.filter(supplier_profile=request.supplier)), pk=pk
+    )
+    return success_response("Invoice fetched.", InvoiceDetailSerializer(invoice).data)

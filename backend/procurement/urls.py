@@ -21,4 +21,15 @@ urlpatterns = [
   path("payments/razorpay/webhook/", views.RazorpayWebhookApi.as_view(), name="razorpay-webhook"),
   path("purchase-orders/<uuid:pk>/advance/", views.AdvancePaymentApi.as_view(), name="po-advance"),
   path("purchase-orders/<uuid:pk>/advance/verify/", views.AdvancePaymentVerifyApi.as_view(), name="po-advance-verify"),
+  path("orders/<uuid:pk>/cancel/", views.PurchaseOrderCancelApi.as_view(), name="order-cancel"),
+  path("orders/", views.PurchaseOrderListApi.as_view(), name="order-list"),
+  path("orders/<uuid:pk>/", views.PurchaseOrderDetailApi.as_view(), name="order-detail"),
+  path("supplier/orders/", views.SupplierPurchaseOrderListApi.as_view(), name="supplier-order-list"),
+  path("supplier/orders/<uuid:pk>/", views.SupplierPurchaseOrderDetailApi.as_view(), name="supplier-order-detail"),
+  path("supplier/orders/<uuid:pk>/dispatch/", views.SupplierPurchaseOrderDispatchApi.as_view(), name="supplier-order-dispatch"),
+  path("invoices/", views.InvoiceListApi.as_view(), name="invoice-list"),
+  path("invoices/<uuid:pk>/", views.InvoiceDetailApi.as_view(), name="invoice-detail"),
+  path("supplier/invoices/", views.SupplierInvoiceListApi.as_view(), name="supplier-invoice-list"),
+  path("supplier/invoices/<uuid:pk>/", views.SupplierInvoiceDetailApi.as_view(), name="supplier-invoice-detail"),
+  
 ]

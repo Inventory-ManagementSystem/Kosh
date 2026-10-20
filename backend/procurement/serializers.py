@@ -4,7 +4,20 @@ from decimal import Decimal
 from django.utils import timezone
 from rest_framework import serializers
 
-from .models import RFQ, Quotation, QuotationItem, RFQItem, RFQRecipient, ReorderSuggestion, PurchaseOrder
+from .models import (
+    RFQ, 
+    Quotation, 
+    QuotationItem, 
+    RFQItem, 
+    RFQRecipient, 
+    ReorderSuggestion, 
+    PurchaseOrder, 
+    PurchaseOrderItem,
+    Shipment,
+    ShipmentItem,
+    Invoice,
+    InvoiceItem,
+)
 from .services import calculate_totals
 from .models import Payment
 
@@ -438,6 +451,19 @@ class PaymentSerializer(serializers.ModelSerializer):
     fields = [
       "id", "amount", "status", "razorpay_order_id", "razorpay_payment_id",
       "failure_reason", "refund_id", "paid_at", "created_at",
+class PurchaseOrderItemSerializer(serializers.ModelSerializer):
+  product_id = serializers.UUIDField(read_only=True)
+  image = serializers.ImageField(source="product.image", read_only=True)
+  category = serializers.CharField(source="product.display_category", read_only=True)
+  supply_category = serializers.CharField(
+    source="product.supply_category.name", read_only=True, default=None
+  )
+
+  class Meta:
+    model = PurchaseOrderItem
+    fields = [
+      "id", "product_id", "product_name", "sku", "image", "category", "supply_category",
+      "quantity", "unit_price", "gst_rate", "line_subtotal", "line_tax", "line_total",
     ]
     read_only_fields = fields
 
@@ -446,3 +472,222 @@ class AdvanceVerifySerializer(serializers.Serializer):
   razorpay_order_id = serializers.CharField(max_length=64)
   razorpay_payment_id = serializers.CharField(max_length=64)
   razorpay_signature = serializers.CharField(max_length=128)
+def po_late_by_days(po):
+  shipment = getattr(po, "shipment", None)
+  if shipment is not None:
+    return shipment.late_by_days
+  if po.status != PurchaseOrder.Status.ISSUED:
+    return 0
+  return max((timezone.localdate() - po.delivery_date).days, 0)
+
+
+class PurchaseOrderListSerializer(PurchaseOrderSummarySerializer):
+  item_count = serializers.SerializerMethodField()
+  total_quantity = serializers.SerializerMethodField()
+  dispatch_date = serializers.SerializerMethodField()
+  expected_delivery_date = serializers.SerializerMethodField()
+  is_late = serializers.SerializerMethodField()
+  late_by_days = serializers.SerializerMethodField()
+
+  class Meta(PurchaseOrderSummarySerializer.Meta):
+    fields = PurchaseOrderSummarySerializer.Meta.fields + [
+      "item_count", "total_quantity", "dispatch_date", "expected_delivery_date",
+      "is_late", "late_by_days",
+    ]
+    read_only_fields = fields
+
+  def get_item_count(self, obj):
+    return len(obj.items.all())
+
+  def get_total_quantity(self, obj):
+    return sum(item.quantity for item in obj.items.all())
+
+  def get_dispatch_date(self, obj):
+    shipment = getattr(obj, "shipment", None)
+    return shipment.dispatched_at if shipment else None
+
+  def get_expected_delivery_date(self, obj):
+    shipment = getattr(obj, "shipment", None)
+    return shipment.expected_delivery_date if shipment else obj.delivery_date
+
+  def get_late_by_days(self, obj):
+    return po_late_by_days(obj)
+
+  def get_is_late(self, obj):
+    return po_late_by_days(obj) > 0
+
+
+class SupplierPurchaseOrderListSerializer(PurchaseOrderListSerializer):
+  business_name = serializers.CharField(source="business.business_name", read_only=True)
+  business_city = serializers.CharField(source="business.city", read_only=True)
+
+  class Meta(PurchaseOrderListSerializer.Meta):
+    fields = PurchaseOrderListSerializer.Meta.fields + ["business_name", "business_city"]
+    read_only_fields = fields
+
+
+class PurchaseOrderDetailSerializer(PurchaseOrderListSerializer):
+  items = PurchaseOrderItemSerializer(many=True, read_only=True)
+  supplier = serializers.SerializerMethodField()
+  buyer = serializers.SerializerMethodField()
+  advance_paid = serializers.SerializerMethodField()
+  shipment = serializers.SerializerMethodField()
+  invoice = serializers.SerializerMethodField()
+
+  class Meta(PurchaseOrderListSerializer.Meta):
+    fields = PurchaseOrderListSerializer.Meta.fields + [
+      "cancelled_at", "advance_paid", "supplier", "buyer", "items",
+      "shipment", "invoice",
+    ]
+    read_only_fields = fields
+
+  def get_advance_paid(self, obj):
+    return any(p.status == "paid" for p in obj.payments.all())
+
+  def get_supplier(self, obj):
+    return supplier_details(obj.supplier_profile)
+
+  def get_buyer(self, obj):
+    return buyer_details(obj.business)
+
+  def get_shipment(self, obj):
+    shipment = getattr(obj, "shipment", None)
+    return ShipmentSerializer(shipment).data if shipment else None
+
+  def get_invoice(self, obj):
+    invoice = getattr(obj, "invoice", None)
+    return InvoiceSummarySerializer(invoice).data if invoice else None
+
+class DispatchItemInputSerializer(serializers.Serializer):
+  purchase_order_item = serializers.UUIDField()
+  quantity = serializers.IntegerField(min_value=0, max_value=1_000_000)
+
+
+class DispatchSerializer(serializers.Serializer):
+  items = DispatchItemInputSerializer(many=True, required=False, allow_empty=False)
+  expected_delivery_date = serializers.DateField(required=False)
+  tracking_note = serializers.CharField(
+    max_length=255, required=False, allow_blank=True, default=""
+  )
+
+  def validate_tracking_note(self, value):
+    return value.strip()
+
+  def validate_items(self, items):
+    ids = [line["purchase_order_item"] for line in items]
+    if len(ids) != len(set(ids)):
+      raise serializers.ValidationError("Each order item can appear only once.")
+    return items
+
+
+class ShipmentItemSerializer(serializers.ModelSerializer):
+  purchase_order_item_id = serializers.UUIDField(read_only=True)
+  product_name = serializers.CharField(source="purchase_order_item.product_name", read_only=True)
+  sku = serializers.CharField(source="purchase_order_item.sku", read_only=True)
+  ordered_quantity = serializers.IntegerField(source="purchase_order_item.quantity", read_only=True)
+
+  class Meta:
+    model = ShipmentItem
+    fields = ["purchase_order_item_id", "product_name", "sku", "ordered_quantity", "quantity"]
+    read_only_fields = fields
+
+
+class ShipmentSerializer(serializers.ModelSerializer):
+  items = ShipmentItemSerializer(many=True, read_only=True)
+
+  class Meta:
+    model = Shipment
+    fields = [
+      "id", "dispatched_at", "expected_delivery_date", "tracking_note",
+      "is_late", "late_by_days", "items",
+    ]
+    read_only_fields = fields
+
+
+class InvoiceSummarySerializer(serializers.ModelSerializer):
+  purchase_order_id = serializers.UUIDField(read_only=True)
+
+  class Meta:
+    model = Invoice
+    fields = [
+      "id", "number", "status", "issue_date", "purchase_order_id",
+      "subtotal", "tax_total", "grand_total", "advance_applied", "balance_due",
+    ]
+    read_only_fields = fields
+
+def supplier_details(profile):
+  return {
+    "company_name": profile.company_name,
+    "phone": profile.phone,
+    "email": profile.user.email,
+    "address": profile.address,
+    "city": profile.city,
+    "gstin": profile.gstin,
+  }
+
+
+def buyer_details(business):
+  owner = business.owner
+  return {
+    "business_name": business.business_name,
+    "business_type": business.business_type,
+    "city": business.city,
+    "owner_name": getattr(getattr(owner, "profile", None), "name", None) or None,
+    "email": owner.email,
+  }
+
+class InvoiceItemSerializer(serializers.ModelSerializer):
+  class Meta:
+    model = InvoiceItem
+    fields = [
+      "id", "product_name", "sku", "quantity", "unit_price", "gst_rate",
+      "line_subtotal", "line_tax", "line_total",
+    ]
+    read_only_fields = fields
+
+
+class InvoiceListSerializer(InvoiceSummarySerializer):
+  po_number = serializers.CharField(source="purchase_order.number", read_only=True)
+  company_name = serializers.CharField(source="supplier_profile.company_name", read_only=True)
+  business_name = serializers.CharField(source="business.business_name", read_only=True)
+  item_count = serializers.SerializerMethodField()
+
+  class Meta(InvoiceSummarySerializer.Meta):
+    fields = InvoiceSummarySerializer.Meta.fields + [
+      "po_number", "company_name", "business_name", "item_count",
+    ]
+    read_only_fields = fields
+
+  def get_item_count(self, obj):
+    return len(obj.items.all())
+
+
+class InvoiceDetailSerializer(InvoiceListSerializer):
+  items = InvoiceItemSerializer(many=True, read_only=True)
+  supplier = serializers.SerializerMethodField()
+  buyer = serializers.SerializerMethodField()
+  shipment = serializers.SerializerMethodField()
+
+  class Meta(InvoiceListSerializer.Meta):
+    fields = InvoiceListSerializer.Meta.fields + [
+      "created_at", "supplier", "buyer", "shipment", "items",
+    ]
+    read_only_fields = fields
+
+  def get_supplier(self, obj):
+    return supplier_details(obj.supplier_profile)
+
+  def get_buyer(self, obj):
+    return buyer_details(obj.business)
+
+  def get_shipment(self, obj):
+    shipment = getattr(obj.purchase_order, "shipment", None)
+    if shipment is None:
+      return None
+    return {
+      "dispatched_at": shipment.dispatched_at,
+      "expected_delivery_date": shipment.expected_delivery_date,
+      "is_late": shipment.is_late,
+      "late_by_days": shipment.late_by_days,
+      "tracking_note": shipment.tracking_note,
+    }

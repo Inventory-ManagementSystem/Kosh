@@ -369,3 +369,121 @@ class Payment(models.Model):
  
   def __str__(self):
     return f"{self.purchase_order.number} - {self.status}"
+
+class Shipment(models.Model):
+  id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+  purchase_order = models.OneToOneField(
+    PurchaseOrder, on_delete=models.PROTECT, related_name="shipment"
+  )
+  dispatched_at = models.DateTimeField()
+  expected_delivery_date = models.DateField()
+  tracking_note = models.CharField(max_length=255, blank=True, default="")
+  created_by = models.ForeignKey(
+    settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+    related_name="+",
+  )
+  created_at = models.DateTimeField(auto_now_add=True)
+
+  @property
+  def late_by_days(self):
+    delay = (self.expected_delivery_date - self.purchase_order.delivery_date).days
+    return max(delay, 0)
+
+  @property
+  def is_late(self):
+    return self.late_by_days > 0
+
+  def __str__(self):
+    return f"Shipment for {self.purchase_order.number}"
+
+
+class ShipmentItem(models.Model):
+  id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+  shipment = models.ForeignKey(Shipment, on_delete=models.CASCADE, related_name="items")
+  purchase_order_item = models.ForeignKey(
+    PurchaseOrderItem, on_delete=models.PROTECT, related_name="shipment_items"
+  )
+  quantity = models.PositiveIntegerField(validators=[MinValueValidator(1)])
+
+  class Meta:
+    constraints = [
+      models.UniqueConstraint(
+        fields=["shipment", "purchase_order_item"], name="uniq_po_item_per_shipment"
+      ),
+    ]
+
+  def __str__(self):
+    return f"{self.purchase_order_item.product_name} x {self.quantity}"
+
+
+class Invoice(models.Model):
+  class Status(models.TextChoices):
+    UNPAID = "unpaid", "Unpaid"
+    PAID = "paid", "Paid"
+
+  id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+  supplier_profile = models.ForeignKey(
+    "suppliers.SupplierProfile", on_delete=models.PROTECT, related_name="invoices"
+  )
+  business = models.ForeignKey(
+    "accounts.Business", on_delete=models.CASCADE, related_name="invoices"
+  )
+  purchase_order = models.OneToOneField(
+    PurchaseOrder, on_delete=models.PROTECT, related_name="invoice"
+  )
+  number = models.CharField(max_length=20)
+  status = models.CharField(max_length=10, choices=Status.choices, default=Status.UNPAID)
+  issue_date = models.DateField()
+
+  subtotal = models.DecimalField(**MONEY, default=0)
+  tax_total = models.DecimalField(**MONEY, default=0)
+  grand_total = models.DecimalField(**MONEY, default=0)
+  advance_applied = models.DecimalField(**MONEY, default=0)
+  balance_due = models.DecimalField(**MONEY, default=0)
+
+  created_at = models.DateTimeField(auto_now_add=True)
+  updated_at = models.DateTimeField(auto_now=True)
+
+  class Meta:
+    ordering = ["-created_at"]
+    indexes = [
+      models.Index(fields=["business", "status"]),
+      models.Index(fields=["supplier_profile", "status"]),
+    ]
+    constraints = [
+      models.UniqueConstraint(
+        fields=["supplier_profile", "number"], name="uniq_invoice_number_per_supplier"
+      ),
+      models.CheckConstraint(
+        condition=models.Q(balance_due__gte=0), name="invoice_balance_not_negative"
+      ),
+    ]
+
+  def __str__(self):
+    return f"{self.number} ({self.supplier_profile.company_name})"
+
+
+class InvoiceItem(models.Model):
+  id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+  invoice = models.ForeignKey(Invoice, on_delete=models.CASCADE, related_name="items")
+  product = models.ForeignKey(
+    "inventory.Product", on_delete=models.PROTECT, related_name="invoice_items"
+  )
+  product_name = models.CharField(max_length=255)
+  sku = models.CharField(max_length=64)
+  quantity = models.PositiveIntegerField(validators=[MinValueValidator(1)])
+  unit_price = models.DecimalField(**MONEY)
+  gst_rate = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+  line_subtotal = models.DecimalField(**MONEY)
+  line_tax = models.DecimalField(**MONEY)
+  line_total = models.DecimalField(**MONEY)
+
+  class Meta:
+    constraints = [
+      models.UniqueConstraint(
+        fields=["invoice", "product"], name="uniq_product_per_invoice"
+      ),
+    ]
+
+  def __str__(self):
+    return f"{self.product_name} x {self.quantity}"
