@@ -17,9 +17,9 @@ from .models import (
     ShipmentItem,
     Invoice,
     InvoiceItem,
+    Payment,
 )
 from .services import calculate_totals
-from .models import Payment
 
 
 
@@ -451,6 +451,10 @@ class PaymentSerializer(serializers.ModelSerializer):
     fields = [
       "id", "amount", "status", "razorpay_order_id", "razorpay_payment_id",
       "failure_reason", "refund_id", "paid_at", "created_at",
+    ]
+    read_only_fields = fields
+
+
 class PurchaseOrderItemSerializer(serializers.ModelSerializer):
   product_id = serializers.UUIDField(read_only=True)
   image = serializers.ImageField(source="product.image", read_only=True)
