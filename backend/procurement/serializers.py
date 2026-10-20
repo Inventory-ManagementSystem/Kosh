@@ -16,6 +16,7 @@ from .models import (
     Shipment,
     ShipmentItem,
     Invoice,
+    InvoiceItem,
 )
 from .services import calculate_totals
 
@@ -516,26 +517,10 @@ class PurchaseOrderDetailSerializer(PurchaseOrderListSerializer):
     return any(p.status == "paid" for p in obj.payments.all())
 
   def get_supplier(self, obj):
-    profile = obj.supplier_profile
-    return {
-      "company_name": profile.company_name,
-      "phone": profile.phone,
-      "email": profile.user.email,
-      "address": profile.address,
-      "city": profile.city,
-      "gstin": profile.gstin,
-    }
+    return supplier_details(obj.supplier_profile)
 
   def get_buyer(self, obj):
-    business = obj.business
-    owner = business.owner
-    return {
-      "business_name": business.business_name,
-      "business_type": business.business_type,
-      "city": business.city,
-      "owner_name": getattr(getattr(owner, "profile", None), "name", None) or None,
-      "email": owner.email,
-    }
+    return buyer_details(obj.business)
 
 class DispatchItemInputSerializer(serializers.Serializer):
   purchase_order_item = serializers.UUIDField()
@@ -593,3 +578,80 @@ class InvoiceSummarySerializer(serializers.ModelSerializer):
       "subtotal", "tax_total", "grand_total", "advance_applied", "balance_due",
     ]
     read_only_fields = fields
+
+def supplier_details(profile):
+  return {
+    "company_name": profile.company_name,
+    "phone": profile.phone,
+    "email": profile.user.email,
+    "address": profile.address,
+    "city": profile.city,
+    "gstin": profile.gstin,
+  }
+
+
+def buyer_details(business):
+  owner = business.owner
+  return {
+    "business_name": business.business_name,
+    "business_type": business.business_type,
+    "city": business.city,
+    "owner_name": getattr(getattr(owner, "profile", None), "name", None) or None,
+    "email": owner.email,
+  }
+
+class InvoiceItemSerializer(serializers.ModelSerializer):
+  class Meta:
+    model = InvoiceItem
+    fields = [
+      "id", "product_name", "sku", "quantity", "unit_price", "gst_rate",
+      "line_subtotal", "line_tax", "line_total",
+    ]
+    read_only_fields = fields
+
+
+class InvoiceListSerializer(InvoiceSummarySerializer):
+  po_number = serializers.CharField(source="purchase_order.number", read_only=True)
+  company_name = serializers.CharField(source="supplier_profile.company_name", read_only=True)
+  business_name = serializers.CharField(source="business.business_name", read_only=True)
+  item_count = serializers.SerializerMethodField()
+
+  class Meta(InvoiceSummarySerializer.Meta):
+    fields = InvoiceSummarySerializer.Meta.fields + [
+      "po_number", "company_name", "business_name", "item_count",
+    ]
+    read_only_fields = fields
+
+  def get_item_count(self, obj):
+    return len(obj.items.all())
+
+
+class InvoiceDetailSerializer(InvoiceListSerializer):
+  items = InvoiceItemSerializer(many=True, read_only=True)
+  supplier = serializers.SerializerMethodField()
+  buyer = serializers.SerializerMethodField()
+  shipment = serializers.SerializerMethodField()
+
+  class Meta(InvoiceListSerializer.Meta):
+    fields = InvoiceListSerializer.Meta.fields + [
+      "created_at", "supplier", "buyer", "shipment", "items",
+    ]
+    read_only_fields = fields
+
+  def get_supplier(self, obj):
+    return supplier_details(obj.supplier_profile)
+
+  def get_buyer(self, obj):
+    return buyer_details(obj.business)
+
+  def get_shipment(self, obj):
+    shipment = getattr(obj.purchase_order, "shipment", None)
+    if shipment is None:
+      return None
+    return {
+      "dispatched_at": shipment.dispatched_at,
+      "expected_delivery_date": shipment.expected_delivery_date,
+      "is_late": shipment.is_late,
+      "late_by_days": shipment.late_by_days,
+      "tracking_note": shipment.tracking_note,
+    }

@@ -45,10 +45,14 @@ from .SwaggerDocs import (
   supplier_po_list_docs,
   supplier_po_detail_docs,
   supplier_po_dispatch_docs,
+  invoice_list_docs,
+  invoice_detail_docs,
+  supplier_invoice_list_docs,
+  supplier_invoice_detail_docs,
 
 )
 
-from .models import RFQ, Quotation, RFQRecipient, ReorderSuggestion, PurchaseOrder, Shipment
+from .models import RFQ, Quotation, RFQRecipient, ReorderSuggestion, PurchaseOrder, Shipment, Invoice
 from .serializers import (
   OwnerQuotationSerializer,
   QuotationSerializer,
@@ -69,6 +73,8 @@ from .serializers import (
   DispatchSerializer,
   ShipmentSerializer,
   InvoiceSummarySerializer,
+  InvoiceListSerializer,
+  InvoiceDetailSerializer,
 
 )
 from .services import (
@@ -626,3 +632,54 @@ class SupplierPurchaseOrderDispatchApi(APIView):
       },
       status=status.HTTP_201_CREATED,
     )
+
+def invoice_queryset(base):
+  return base.select_related(
+    "purchase_order__shipment", "business__owner__profile", "supplier_profile__user"
+  ).prefetch_related("items")
+
+
+@invoice_list_docs
+class InvoiceListApi(APIView):
+  permission_classes = [HasBusinessAccess]
+
+  def get(self, request):
+    qs = invoice_queryset(Invoice.objects.filter(business=request.business))
+    status_param = request.query_params.get("status")
+    if status_param in Invoice.Status.values:
+      qs = qs.filter(status=status_param)
+    return paginated_response(request, qs, InvoiceListSerializer, "Invoices fetched.")
+
+
+@invoice_detail_docs
+class InvoiceDetailApi(APIView):
+  permission_classes = [HasBusinessAccess]
+
+  def get(self, request, pk):
+    invoice = get_object_or_404(
+      invoice_queryset(Invoice.objects.filter(business=request.business)), pk=pk
+    )
+    return success_response("Invoice fetched.", InvoiceDetailSerializer(invoice).data)
+
+
+@supplier_invoice_list_docs
+class SupplierInvoiceListApi(APIView):
+  permission_classes = [IsAuthenticated, IsSupplier]
+
+  def get(self, request):
+    qs = invoice_queryset(Invoice.objects.filter(supplier_profile=request.supplier))
+    status_param = request.query_params.get("status")
+    if status_param in Invoice.Status.values:
+      qs = qs.filter(status=status_param)
+    return paginated_response(request, qs, InvoiceListSerializer, "Invoices fetched.")
+
+
+@supplier_invoice_detail_docs
+class SupplierInvoiceDetailApi(APIView):
+  permission_classes = [IsAuthenticated, IsSupplier]
+
+  def get(self, request, pk):
+    invoice = get_object_or_404(
+      invoice_queryset(Invoice.objects.filter(supplier_profile=request.supplier)), pk=pk
+    )
+    return success_response("Invoice fetched.", InvoiceDetailSerializer(invoice).data)

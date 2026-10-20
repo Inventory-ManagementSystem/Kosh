@@ -1633,3 +1633,159 @@ supplier_po_dispatch_docs = extend_schema_view(
     },
   ),
 )
+
+INVOICE_LIST_ITEM_EXAMPLE = {
+  **INVOICE_SUMMARY_EXAMPLE,
+  "po_number": "PO-0001",
+  "company_name": "Sharma Traders",
+  "business_name": "Gupta Kirana",
+  "item_count": 2,
+}
+
+INVOICE_DETAIL_EXAMPLE = {
+  **INVOICE_LIST_ITEM_EXAMPLE,
+  "created_at": "2026-10-14T09:30:00Z",
+  "supplier": PURCHASE_ORDER_DETAIL_EXAMPLE["supplier"],
+  "buyer": PURCHASE_ORDER_DETAIL_EXAMPLE["buyer"],
+  "shipment": {
+    "dispatched_at": "2026-10-14T09:30:00Z",
+    "expected_delivery_date": "2026-10-17",
+    "is_late": True,
+    "late_by_days": 2,
+    "tracking_note": "Truck DL1C 4567",
+  },
+  "items": [
+    {
+      "id": "a4c8e2d6-1b37-4f90-8d52-7e0b3a9c6f14",
+      "product_name": "Amul Dahi",
+      "sku": "SKU-787328",
+      "quantity": 70,
+      "unit_price": "42.00",
+      "gst_rate": "5.00",
+      "line_subtotal": "2940.00",
+      "line_tax": "147.00",
+      "line_total": "3087.00",
+    },
+    {
+      "id": "3f9b5d1a-6c42-4e78-a0d3-8b2e7c4f1a65",
+      "product_name": "Amul Milk 1L",
+      "sku": "SKU-202",
+      "quantity": 40,
+      "unit_price": "30.00",
+      "gst_rate": "5.00",
+      "line_subtotal": "1200.00",
+      "line_tax": "60.00",
+      "line_total": "1260.00",
+    },
+  ],
+}
+
+INVOICE_NOTE = (
+  "Invoices are generated automatically when the supplier marks an order as "
+  "dispatched; nobody types them. The invoice is the supplier's bill, issued to "
+  "the buyer, and covers only the quantities dispatched. `advance_applied` is the "
+  "advance already paid on the order and `balance_due` is what is left to pay after "
+  "delivery. `status` is `unpaid` or `paid`. Numbers run per supplier (INV-0001, "
+  "INV-0002, ...)."
+)
+
+INVOICE_NOT_FOUND_RESPONSE = resp(
+  "No such invoice for this user. An invoice that belongs to someone else also "
+  "returns this.",
+  err_example("Not Found", "No Invoice matches the given query.", "NOT_FOUND"),
+)
+
+INVOICE_PAGE_NOT_FOUND_RESPONSE = resp(
+  "The page number is out of range.",
+  err_example("Invalid Page", "Invalid page.", "NOT_FOUND"),
+)
+
+STATUS_FILTER_PARAMETER = OpenApiParameter(
+  "status", OpenApiTypes.STR, OpenApiParameter.QUERY,
+  description="`unpaid` or `paid`. Any other value is ignored and all invoices are returned.",
+)
+
+invoice_list_docs = extend_schema_view(
+  get=extend_schema(
+    operation_id="procurement_invoices_list",
+    summary="List Invoices",
+    description=(
+      "Returns the invoices issued to the logged-in user's business, newest first, "
+      "paginated. " + INVOICE_NOTE + " " + ACCESS_NOTE
+    ),
+    parameters=[STATUS_FILTER_PARAMETER, *PAGE_PARAMETERS],
+    responses={
+      200: resp(
+        "Paginated invoice list.",
+        ok_example("Invoices", "Invoices fetched.", data=paginated(INVOICE_LIST_ITEM_EXAMPLE)),
+        ok_example("No Invoices", "Invoices fetched.", data=paginated()),
+      ),
+      401: UNAUTHORIZED_RESPONSE,
+      403: FORBIDDEN_RESPONSE,
+      404: INVOICE_PAGE_NOT_FOUND_RESPONSE,
+    },
+  ),
+)
+
+invoice_detail_docs = extend_schema_view(
+  get=extend_schema(
+    operation_id="procurement_invoices_retrieve",
+    summary="Get Invoice",
+    description=(
+      "Returns one invoice with its lines, the supplier (issuer) and buyer details "
+      "and the shipment dates. " + INVOICE_NOTE + " " + ACCESS_NOTE
+    ),
+    responses={
+      200: resp(
+        "Invoice details.",
+        ok_example("Invoice", "Invoice fetched.", data=INVOICE_DETAIL_EXAMPLE),
+      ),
+      401: UNAUTHORIZED_RESPONSE,
+      403: FORBIDDEN_RESPONSE,
+      404: INVOICE_NOT_FOUND_RESPONSE,
+    },
+  ),
+)
+
+supplier_invoice_list_docs = extend_schema_view(
+  get=extend_schema(
+    operation_id="procurement_supplier_invoices_list",
+    summary="Supplier: List My Invoices",
+    description=(
+      "The invoices the supplier has issued, newest first, paginated. "
+      + INVOICE_NOTE + " Supplier only; a supplier sees only their own invoices."
+    ),
+    parameters=[STATUS_FILTER_PARAMETER, *PAGE_PARAMETERS],
+    responses={
+      200: resp(
+        "Paginated invoice list.",
+        ok_example("Invoices", "Invoices fetched.", data=paginated(INVOICE_LIST_ITEM_EXAMPLE)),
+        ok_example("No Invoices", "Invoices fetched.", data=paginated()),
+      ),
+      401: UNAUTHORIZED_RESPONSE,
+      403: NOT_SUPPLIER_RESPONSE,
+      404: INVOICE_PAGE_NOT_FOUND_RESPONSE,
+    },
+  ),
+)
+
+supplier_invoice_detail_docs = extend_schema_view(
+  get=extend_schema(
+    operation_id="procurement_supplier_invoices_retrieve",
+    summary="Supplier: Get Invoice",
+    description=(
+      "One of the supplier's invoices with its lines, both parties' details and the "
+      "shipment dates. " + INVOICE_NOTE
+      + " Supplier only; an invoice of another supplier returns a 404."
+    ),
+    responses={
+      200: resp(
+        "Invoice details.",
+        ok_example("Invoice", "Invoice fetched.", data=INVOICE_DETAIL_EXAMPLE),
+      ),
+      401: UNAUTHORIZED_RESPONSE,
+      403: NOT_SUPPLIER_RESPONSE,
+      404: INVOICE_NOT_FOUND_RESPONSE,
+    },
+  ),
+)
