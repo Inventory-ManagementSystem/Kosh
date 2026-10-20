@@ -20,6 +20,8 @@ from notifications import events
 from .alert_services import create_alerts_for_business
 from .ranking import WeightError, parse_weights, rank_quotations
 from .dispatch_services import mark_dispatched
+from notifications.models import Notification
+from notifications.services import notify_many
 
 
 from .SwaggerDocs import (
@@ -165,20 +167,17 @@ class RFQCancelApi(APIView):
   permission_classes = [HasBusinessAccess, IsOwner]
 
   def post(self, request, pk):
-    rfq = get_object_or_404(RFQ, pk=pk, business=request.business)
-    if rfq.status != RFQ.Status.OPEN:
-      return Response(
-        {
-          "success": False,
-          "message": "Only an open RFQ can be cancelled.",
-          "code": "RFQ_NOT_OPEN",
-          "errors": None,
-          "details": None,
-        },
-        status=400,
-      )
-
     with transaction.atomic():
+      rfq = get_object_or_404(
+        RFQ.objects.select_for_update(), pk=pk, business=request.business
+      )
+      if rfq.status not in (RFQ.Status.OPEN, RFQ.Status.CLOSED):
+        return error_response(
+          "Only an open or closed RFQ can be cancelled.",
+          "RFQ_NOT_OPEN",
+          status=status.HTTP_400_BAD_REQUEST,
+        )
+
       rfq.status = RFQ.Status.CANCELLED
       rfq.save(update_fields=["status", "updated_at"])
 
@@ -190,7 +189,17 @@ class RFQCancelApi(APIView):
         updated_at=timezone.now(),
       )
 
-      events.rfq_cancelled(rfq)
+      recipients = rfq.recipients.select_related("supplier_profile__user").exclude(
+        status=RFQRecipient.Status.DECLINED
+      )
+      notify_many(
+        [r.supplier_profile.user for r in recipients],
+        f"RFQ {rfq.number} was cancelled",
+        f"{request.business.business_name} cancelled this request. "
+        "You don't need to send a quotation.",
+        kind=Notification.Kind.RFQ,
+        push=False,
+      )
 
     return Response({"success": True, "message": "RFQ cancelled.", "data": None})
 

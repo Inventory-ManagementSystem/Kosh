@@ -311,24 +311,25 @@ rfq_cancel_docs = extend_schema_view(
     operation_id="procurement_rfqs_cancel",
     summary="Cancel RFQ",
     description=(
-      "Cancels an RFQ so suppliers can no longer send quotations. Only an RFQ whose "
-      "status is `open` can be cancelled; an awarded, closed or already cancelled "
-      "RFQ returns a 400. The RFQ stays in the list with status `cancelled`, so the "
-      "history is kept. If it was created from a low-stock alert, the alert goes "
-      "back to `open`, so the owner can create a new RFQ from it. For a product with "
-      "enough dispatch history, the nightly check creates a new RFQ automatically "
-      "unless the alert is dismissed. Suppliers who had not declined get an in-app "
-      "notification. No request body is needed. A cancelled RFQ cannot be reopened. "
-      + OWNER_NOTE
+      "Cancels an RFQ so suppliers can no longer send quotations. An RFQ whose "
+      "status is `open`, or `closed` (the deadline passed and nobody was chosen), "
+      "can be cancelled; an awarded or already cancelled RFQ returns a 400. The RFQ "
+      "stays in the list with status `cancelled`, so the history is kept. If it was "
+      "created from a low-stock alert, the alert goes back to `open`, so the owner "
+      "can create a new RFQ from it. For a product with enough dispatch history, the "
+      "nightly check creates a new RFQ automatically unless the alert is dismissed. "
+      "Suppliers who had not declined get an in-app notification. No request body is "
+      "needed. A cancelled RFQ cannot be reopened. To undo an accepted quotation "
+      "whose advance is unpaid, cancel the order instead. " + OWNER_NOTE
     ),
     request=None,
     responses={
       200: resp("RFQ cancelled.", ok_example("Cancelled", "RFQ cancelled.")),
       400: resp(
-        "The RFQ is not open.",
+        "The RFQ is awarded or already cancelled.",
         err_example(
-          "Not Open",
-          "Only an open RFQ can be cancelled.",
+          "Not Open Or Closed",
+          "Only an open or closed RFQ can be cancelled.",
           "RFQ_NOT_OPEN",
         ),
       ),
