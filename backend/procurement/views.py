@@ -19,6 +19,10 @@ from django.db import transaction
 from notifications import events
 from .alert_services import create_alerts_for_business
 from .ranking import WeightError, parse_weights, rank_quotations
+from .dispatch_services import mark_dispatched
+from notifications.models import Notification
+from notifications.services import notify_many
+
 
 from .SwaggerDocs import (
   reorder_alert_list_docs,
@@ -42,10 +46,15 @@ from .SwaggerDocs import (
   po_detail_docs,
   supplier_po_list_docs,
   supplier_po_detail_docs,
+  supplier_po_dispatch_docs,
+  invoice_list_docs,
+  invoice_detail_docs,
+  supplier_invoice_list_docs,
+  supplier_invoice_detail_docs,
 
 )
 
-from .models import RFQ, Quotation, RFQRecipient, ReorderSuggestion, PurchaseOrder
+from .models import RFQ, Quotation, RFQRecipient, ReorderSuggestion, PurchaseOrder, Shipment, Invoice
 from .serializers import (
   OwnerQuotationSerializer,
   QuotationSerializer,
@@ -63,6 +72,11 @@ from .serializers import (
   PurchaseOrderListSerializer,
   PurchaseOrderDetailSerializer,
   SupplierPurchaseOrderListSerializer,
+  DispatchSerializer,
+  ShipmentSerializer,
+  InvoiceSummarySerializer,
+  InvoiceListSerializer,
+  InvoiceDetailSerializer,
 
 )
 from .services import (
@@ -153,20 +167,17 @@ class RFQCancelApi(APIView):
   permission_classes = [HasBusinessAccess, IsOwner]
 
   def post(self, request, pk):
-    rfq = get_object_or_404(RFQ, pk=pk, business=request.business)
-    if rfq.status != RFQ.Status.OPEN:
-      return Response(
-        {
-          "success": False,
-          "message": "Only an open RFQ can be cancelled.",
-          "code": "RFQ_NOT_OPEN",
-          "errors": None,
-          "details": None,
-        },
-        status=400,
-      )
-
     with transaction.atomic():
+      rfq = get_object_or_404(
+        RFQ.objects.select_for_update(), pk=pk, business=request.business
+      )
+      if rfq.status not in (RFQ.Status.OPEN, RFQ.Status.CLOSED):
+        return error_response(
+          "Only an open or closed RFQ can be cancelled.",
+          "RFQ_NOT_OPEN",
+          status=status.HTTP_400_BAD_REQUEST,
+        )
+
       rfq.status = RFQ.Status.CANCELLED
       rfq.save(update_fields=["status", "updated_at"])
 
@@ -178,7 +189,17 @@ class RFQCancelApi(APIView):
         updated_at=timezone.now(),
       )
 
-      events.rfq_cancelled(rfq)
+      recipients = rfq.recipients.select_related("supplier_profile__user").exclude(
+        status=RFQRecipient.Status.DECLINED
+      )
+      notify_many(
+        [r.supplier_profile.user for r in recipients],
+        f"RFQ {rfq.number} was cancelled",
+        f"{request.business.business_name} cancelled this request. "
+        "You don't need to send a quotation.",
+        kind=Notification.Kind.RFQ,
+        push=False,
+      )
 
     return Response({"success": True, "message": "RFQ cancelled.", "data": None})
 
@@ -466,6 +487,7 @@ PO_ERROR_STATUS = {
   "ORDER_CANCELLED": 409,
   "ORDER_NOT_CANCELLABLE": 409,
   "PAYMENT_RECEIVED": 409,
+  "ALREADY_DISPATCHED": 409,
 }
  
  
@@ -515,9 +537,12 @@ class PurchaseOrderCancelApi(APIView):
 
 def po_queryset(base):
   return (
-    base.select_related("rfq", "business__owner__profile", "supplier_profile__user")
+    base.select_related(
+      "rfq", "business__owner__profile", "supplier_profile__user", "shipment", "invoice"
+    )
     .prefetch_related(
-      "items__product__category", "items__product__supply_category", "payments"
+      "items__product__category", "items__product__supply_category", "payments",
+      "shipment__items__purchase_order_item",
     )
   )
 
@@ -578,3 +603,95 @@ class SupplierPurchaseOrderDetailApi(APIView):
       "Order fetched.",
       PurchaseOrderDetailSerializer(po, context={"request": request}).data,
     )
+
+@supplier_po_dispatch_docs
+class SupplierPurchaseOrderDispatchApi(APIView):
+  permission_classes = [IsAuthenticated, IsSupplier]
+  throttle_classes = [OrderWriteThrottle]
+
+  def post(self, request, pk):
+    serializer = DispatchSerializer(data=request.data)
+    if not serializer.is_valid():
+      return validation_error_response(serializer)
+    data = serializer.validated_data
+
+    quantities = None
+    if "items" in data:
+      quantities = {
+        line["purchase_order_item"]: line["quantity"] for line in data["items"]
+      }
+
+    try:
+      shipment, invoice = mark_dispatched(
+        request.supplier,
+        pk,
+        request.user,
+        quantities=quantities,
+        expected_delivery_date=data.get("expected_delivery_date"),
+        tracking_note=data["tracking_note"],
+      )
+    except PurchaseOrderError as err:
+      return po_error_response(err)
+
+    shipment = Shipment.objects.prefetch_related("items__purchase_order_item").get(
+      pk=shipment.pk
+    )
+    return success_response(
+      "Order marked as dispatched. Invoice generated.",
+      {
+        "shipment": ShipmentSerializer(shipment).data,
+        "invoice": InvoiceSummarySerializer(invoice).data,
+      },
+      status=status.HTTP_201_CREATED,
+    )
+
+def invoice_queryset(base):
+  return base.select_related(
+    "purchase_order__shipment", "business__owner__profile", "supplier_profile__user"
+  ).prefetch_related("items")
+
+
+@invoice_list_docs
+class InvoiceListApi(APIView):
+  permission_classes = [HasBusinessAccess]
+
+  def get(self, request):
+    qs = invoice_queryset(Invoice.objects.filter(business=request.business))
+    status_param = request.query_params.get("status")
+    if status_param in Invoice.Status.values:
+      qs = qs.filter(status=status_param)
+    return paginated_response(request, qs, InvoiceListSerializer, "Invoices fetched.")
+
+
+@invoice_detail_docs
+class InvoiceDetailApi(APIView):
+  permission_classes = [HasBusinessAccess]
+
+  def get(self, request, pk):
+    invoice = get_object_or_404(
+      invoice_queryset(Invoice.objects.filter(business=request.business)), pk=pk
+    )
+    return success_response("Invoice fetched.", InvoiceDetailSerializer(invoice).data)
+
+
+@supplier_invoice_list_docs
+class SupplierInvoiceListApi(APIView):
+  permission_classes = [IsAuthenticated, IsSupplier]
+
+  def get(self, request):
+    qs = invoice_queryset(Invoice.objects.filter(supplier_profile=request.supplier))
+    status_param = request.query_params.get("status")
+    if status_param in Invoice.Status.values:
+      qs = qs.filter(status=status_param)
+    return paginated_response(request, qs, InvoiceListSerializer, "Invoices fetched.")
+
+
+@supplier_invoice_detail_docs
+class SupplierInvoiceDetailApi(APIView):
+  permission_classes = [IsAuthenticated, IsSupplier]
+
+  def get(self, request, pk):
+    invoice = get_object_or_404(
+      invoice_queryset(Invoice.objects.filter(supplier_profile=request.supplier)), pk=pk
+    )
+    return success_response("Invoice fetched.", InvoiceDetailSerializer(invoice).data)
