@@ -14,7 +14,7 @@ from accounts.swagger import (
   UNAUTHORIZED_RESPONSE,
 )
 
-from .serializers import QuotationSubmitSerializer, RFQUpdateSerializer, RFQCreateSerializer, RFQUpdateSerializer, BulkRFQCreateSerializer
+from .serializers import QuotationSubmitSerializer, RFQUpdateSerializer, RFQCreateSerializer, RFQUpdateSerializer, BulkRFQCreateSerializer, DispatchSerializer, AdvanceVerifySerializer
 
 
 RFQ_ITEMS_EXAMPLE = [
@@ -311,24 +311,25 @@ rfq_cancel_docs = extend_schema_view(
     operation_id="procurement_rfqs_cancel",
     summary="Cancel RFQ",
     description=(
-      "Cancels an RFQ so suppliers can no longer send quotations. Only an RFQ whose "
-      "status is `open` can be cancelled; an awarded, closed or already cancelled "
-      "RFQ returns a 400. The RFQ stays in the list with status `cancelled`, so the "
-      "history is kept. If it was created from a low-stock alert, the alert goes "
-      "back to `open`, so the owner can create a new RFQ from it. For a product with "
-      "enough dispatch history, the nightly check creates a new RFQ automatically "
-      "unless the alert is dismissed. Suppliers who had not declined get an in-app "
-      "notification. No request body is needed. A cancelled RFQ cannot be reopened. "
-      + OWNER_NOTE
+      "Cancels an RFQ so suppliers can no longer send quotations. An RFQ whose "
+      "status is `open`, or `closed` (the deadline passed and nobody was chosen), "
+      "can be cancelled; an awarded or already cancelled RFQ returns a 400. The RFQ "
+      "stays in the list with status `cancelled`, so the history is kept. If it was "
+      "created from a low-stock alert, the alert goes back to `open`, so the owner "
+      "can create a new RFQ from it. For a product with enough dispatch history, the "
+      "nightly check creates a new RFQ automatically unless the alert is dismissed. "
+      "Suppliers who had not declined get an in-app notification. No request body is "
+      "needed. A cancelled RFQ cannot be reopened. To undo an accepted quotation "
+      "whose advance is unpaid, cancel the order instead. " + OWNER_NOTE
     ),
     request=None,
     responses={
       200: resp("RFQ cancelled.", ok_example("Cancelled", "RFQ cancelled.")),
       400: resp(
-        "The RFQ is not open.",
+        "The RFQ is awarded or already cancelled.",
         err_example(
-          "Not Open",
-          "Only an open RFQ can be cancelled.",
+          "Not Open Or Closed",
+          "Only an open or closed RFQ can be cancelled.",
           "RFQ_NOT_OPEN",
         ),
       ),
@@ -1335,6 +1336,8 @@ PURCHASE_ORDER_LIST_ITEM_EXAMPLE = {
   **PURCHASE_ORDER_NO_ADVANCE_EXAMPLE,
   "item_count": 2,
   "total_quantity": 140,
+  "dispatch_date": None,
+  "expected_delivery_date": "2026-10-15",
   "is_late": False,
   "late_by_days": 0,
 }
@@ -1359,6 +1362,8 @@ PURCHASE_ORDER_DETAIL_EXAMPLE = {
     "email": "ramesh@example.com",
   },
   "items": [PO_ITEM_EXAMPLE],
+  "shipment": None,
+  "invoice": None,
 }
 
 PO_PAGE_NOT_FOUND_RESPONSE = resp(
@@ -1376,8 +1381,14 @@ PO_FIELDS_NOTE = (
   "`status` is `awaiting_advance` (accepted, advance not paid yet), `issued` (the "
   "supplier can see it), `dispatched`, `partially_received`, `received` or "
   "`cancelled`. `balance_amount` is the grand total minus the advance, due after "
-  "delivery. `is_late` is true while an `issued` order is past its `delivery_date`; "
-  "`late_by_days` says by how many days."
+  "delivery. `dispatch_date` is when the supplier dispatched the order (null until "
+  "then). `expected_delivery_date` is the supplier's current expected date once "
+  "dispatched, otherwise the order's `delivery_date`. `is_late` is true when the "
+  "order is past its `delivery_date` before dispatch, or when the supplier set an "
+  "expected date later than it at dispatch; `late_by_days` says by how many days. "
+  "In the order detail, `shipment` and `invoice` are null until the order is "
+  "dispatched; after that they have the same shape as in Supplier: Mark Order "
+  "Dispatched."
 )
 
 po_list_docs = extend_schema_view(
@@ -1494,6 +1505,516 @@ supplier_po_detail_docs = extend_schema_view(
       401: UNAUTHORIZED_RESPONSE,
       403: NOT_SUPPLIER_RESPONSE,
       404: PO_DETAIL_NOT_FOUND_RESPONSE,
+    },
+  ),
+)
+
+SHIPMENT_EXAMPLE = {
+  "id": "7c4e1a92-5d08-4b36-9f21-a3e8d6c0b715",
+  "dispatched_at": "2026-10-14T09:30:00Z",
+  "expected_delivery_date": "2026-10-17",
+  "tracking_note": "Truck DL1C 4567",
+  "is_late": True,
+  "late_by_days": 2,
+  "items": [
+    {
+      "purchase_order_item_id": "5b8e2c71-3d94-4f06-a1c7-9e0d6b3f8a24",
+      "product_name": "Amul Dahi",
+      "sku": "SKU-787328",
+      "ordered_quantity": 70,
+      "quantity": 70,
+    },
+    {
+      "purchase_order_item_id": "d9a3f6b0-2e17-4c85-8b4d-1f7a0e5c9d32",
+      "product_name": "Amul Milk 1L",
+      "sku": "SKU-202",
+      "ordered_quantity": 70,
+      "quantity": 40,
+    },
+  ],
+}
+
+INVOICE_SUMMARY_EXAMPLE = {
+  "id": "e1b7c3a5-9f02-4d68-a4e1-6c0d8b2f7a93",
+  "number": "INV-0001",
+  "status": "unpaid",
+  "issue_date": "2026-10-14",
+  "purchase_order_id": "2f6b9d04-7c1e-4a83-b5f2-9e0d3a8c6b17",
+  "subtotal": "3140.00",
+  "tax_total": "157.00",
+  "grand_total": "3297.00",
+  "advance_applied": "1000.00",
+  "balance_due": "2297.00",
+}
+
+ORDER_NOT_FOUND_FOR_SUPPLIER_RESPONSE = resp(
+  "No such order for this supplier, or the order is not `issued` or later yet.",
+  err_example("Not Found", "Order not found.", "ORDER_NOT_FOUND"),
+)
+
+supplier_po_dispatch_docs = extend_schema_view(
+  post=extend_schema(
+    operation_id="procurement_supplier_orders_dispatch",
+    summary="Supplier: Mark Order Dispatched",
+    description=(
+      "The supplier marks an `issued` order as dispatched. In one step the server "
+      "creates the shipment, generates the invoice automatically and changes the "
+      "order status to `dispatched`. The owner is notified, and told which products "
+      "are short if less than ordered was sent. There is one shipment per order, so "
+      "this can be done only once.\n\n"
+      "- `items`: optional. One entry per order line, with the line's `id` from "
+      "Supplier: Get Order as `purchase_order_item` and the units sent as `quantity`. "
+      "The screen pre-fills the ordered quantities and the supplier may lower them, "
+      "never raise them. A line with 0 or a line left out is not dispatched and not "
+      "invoiced. At least one unit must be sent. If `items` is left out, everything "
+      "is dispatched as ordered.\n"
+      "- `expected_delivery_date`: optional, `YYYY-MM-DD`, today or later. Defaults to "
+      "the order's `delivery_date`. A date later than the order's is allowed and is "
+      "shown to the owner as late (`is_late`, `late_by_days`).\n"
+      "- `tracking_note`: optional, up to 255 characters, for a vehicle or tracking "
+      "number.\n\n"
+      "The invoice is calculated by the server from the dispatched quantities, the "
+      "order's unit prices and GST. `advance_applied` is the advance already paid "
+      "(never more than the invoice total) and `balance_due` is what is left to pay "
+      "after delivery. " + SUPPLIER_PO_NOTE + " Accepts JSON; the body may be empty."
+    ),
+    request=DispatchSerializer,
+    examples=[
+      OpenApiExample("Dispatch Everything", value={}, request_only=True),
+      OpenApiExample(
+        "Partial Dispatch",
+        value={
+          "items": [
+            {"purchase_order_item": "5b8e2c71-3d94-4f06-a1c7-9e0d6b3f8a24", "quantity": 70},
+            {"purchase_order_item": "d9a3f6b0-2e17-4c85-8b4d-1f7a0e5c9d32", "quantity": 40},
+          ],
+          "expected_delivery_date": "2026-10-17",
+          "tracking_note": "Truck DL1C 4567",
+        },
+        request_only=True,
+      ),
+    ],
+    responses={
+      201: resp(
+        "Order dispatched, invoice generated.",
+        ok_example(
+          "Dispatched",
+          "Order marked as dispatched. Invoice generated.",
+          data={"shipment": SHIPMENT_EXAMPLE, "invoice": INVOICE_SUMMARY_EXAMPLE},
+        ),
+      ),
+      400: resp(
+        "Validation error, or the quantities are not allowed.",
+        err_example("Duplicate Item", "Validation failed.", "VALIDATION_ERROR", errors={
+          "items": ["Each order item can appear only once."],
+        }),
+        err_example("Invalid Item Id", "Validation failed.", "VALIDATION_ERROR", errors={
+          "items": [{"purchase_order_item": ["Must be a valid UUID."]}],
+        }),
+        err_example("Invalid Date", "Validation failed.", "VALIDATION_ERROR", errors={
+          "expected_delivery_date": [
+            "Date has wrong format. Use one of these formats instead: YYYY-MM-DD."
+          ],
+        }),
+        err_example(
+          "Not In Order", "One of the items is not part of this order.", "INVALID_ITEM",
+        ),
+        err_example(
+          "More Than Ordered",
+          "You can't dispatch more than ordered: 70 units of Amul Milk 1L.",
+          "QUANTITY_TOO_HIGH",
+        ),
+        err_example("Nothing Sent", "Dispatch at least one item.", "NOTHING_TO_DISPATCH"),
+        err_example(
+          "Date In Past",
+          "The expected delivery date can't be in the past.",
+          "EXPECTED_DATE_IN_PAST",
+        ),
+      ),
+      401: UNAUTHORIZED_RESPONSE,
+      403: NOT_SUPPLIER_RESPONSE,
+      404: ORDER_NOT_FOUND_FOR_SUPPLIER_RESPONSE,
+      409: resp(
+        "The order was already dispatched.",
+        err_example(
+          "Already Dispatched", "This order has already been dispatched.", "ALREADY_DISPATCHED",
+        ),
+      ),
+      429: THROTTLED_RESPONSE,
+    },
+  ),
+)
+
+INVOICE_LIST_ITEM_EXAMPLE = {
+  **INVOICE_SUMMARY_EXAMPLE,
+  "po_number": "PO-0001",
+  "company_name": "Sharma Traders",
+  "business_name": "Gupta Kirana",
+  "item_count": 2,
+}
+
+INVOICE_DETAIL_EXAMPLE = {
+  **INVOICE_LIST_ITEM_EXAMPLE,
+  "created_at": "2026-10-14T09:30:00Z",
+  "supplier": PURCHASE_ORDER_DETAIL_EXAMPLE["supplier"],
+  "buyer": PURCHASE_ORDER_DETAIL_EXAMPLE["buyer"],
+  "shipment": {
+    "dispatched_at": "2026-10-14T09:30:00Z",
+    "expected_delivery_date": "2026-10-17",
+    "is_late": True,
+    "late_by_days": 2,
+    "tracking_note": "Truck DL1C 4567",
+  },
+  "items": [
+    {
+      "id": "a4c8e2d6-1b37-4f90-8d52-7e0b3a9c6f14",
+      "product_name": "Amul Dahi",
+      "sku": "SKU-787328",
+      "quantity": 70,
+      "unit_price": "42.00",
+      "gst_rate": "5.00",
+      "line_subtotal": "2940.00",
+      "line_tax": "147.00",
+      "line_total": "3087.00",
+    },
+    {
+      "id": "3f9b5d1a-6c42-4e78-a0d3-8b2e7c4f1a65",
+      "product_name": "Amul Milk 1L",
+      "sku": "SKU-202",
+      "quantity": 40,
+      "unit_price": "30.00",
+      "gst_rate": "5.00",
+      "line_subtotal": "1200.00",
+      "line_tax": "60.00",
+      "line_total": "1260.00",
+    },
+  ],
+}
+
+INVOICE_NOTE = (
+  "Invoices are generated automatically when the supplier marks an order as "
+  "dispatched; nobody types them. The invoice is the supplier's bill, issued to "
+  "the buyer, and covers only the quantities dispatched. `advance_applied` is the "
+  "advance already paid on the order and `balance_due` is what is left to pay after "
+  "delivery. `status` is `unpaid` or `paid`. Numbers run per supplier (INV-0001, "
+  "INV-0002, ...)."
+)
+
+INVOICE_NOT_FOUND_RESPONSE = resp(
+  "No such invoice for this user. An invoice that belongs to someone else also "
+  "returns this.",
+  err_example("Not Found", "No Invoice matches the given query.", "NOT_FOUND"),
+)
+
+INVOICE_PAGE_NOT_FOUND_RESPONSE = resp(
+  "The page number is out of range.",
+  err_example("Invalid Page", "Invalid page.", "NOT_FOUND"),
+)
+
+STATUS_FILTER_PARAMETER = OpenApiParameter(
+  "status", OpenApiTypes.STR, OpenApiParameter.QUERY,
+  description="`unpaid` or `paid`. Any other value is ignored and all invoices are returned.",
+)
+
+invoice_list_docs = extend_schema_view(
+  get=extend_schema(
+    operation_id="procurement_invoices_list",
+    summary="List Invoices",
+    description=(
+      "Returns the invoices issued to the logged-in user's business, newest first, "
+      "paginated. " + INVOICE_NOTE + " " + ACCESS_NOTE
+    ),
+    parameters=[STATUS_FILTER_PARAMETER, *PAGE_PARAMETERS],
+    responses={
+      200: resp(
+        "Paginated invoice list.",
+        ok_example("Invoices", "Invoices fetched.", data=paginated(INVOICE_LIST_ITEM_EXAMPLE)),
+        ok_example("No Invoices", "Invoices fetched.", data=paginated()),
+      ),
+      401: UNAUTHORIZED_RESPONSE,
+      403: FORBIDDEN_RESPONSE,
+      404: INVOICE_PAGE_NOT_FOUND_RESPONSE,
+    },
+  ),
+)
+
+invoice_detail_docs = extend_schema_view(
+  get=extend_schema(
+    operation_id="procurement_invoices_retrieve",
+    summary="Get Invoice",
+    description=(
+      "Returns one invoice with its lines, the supplier (issuer) and buyer details "
+      "and the shipment dates. " + INVOICE_NOTE + " " + ACCESS_NOTE
+    ),
+    responses={
+      200: resp(
+        "Invoice details.",
+        ok_example("Invoice", "Invoice fetched.", data=INVOICE_DETAIL_EXAMPLE),
+      ),
+      401: UNAUTHORIZED_RESPONSE,
+      403: FORBIDDEN_RESPONSE,
+      404: INVOICE_NOT_FOUND_RESPONSE,
+    },
+  ),
+)
+
+supplier_invoice_list_docs = extend_schema_view(
+  get=extend_schema(
+    operation_id="procurement_supplier_invoices_list",
+    summary="Supplier: List My Invoices",
+    description=(
+      "The invoices the supplier has issued, newest first, paginated. "
+      + INVOICE_NOTE + " Supplier only; a supplier sees only their own invoices."
+    ),
+    parameters=[STATUS_FILTER_PARAMETER, *PAGE_PARAMETERS],
+    responses={
+      200: resp(
+        "Paginated invoice list.",
+        ok_example("Invoices", "Invoices fetched.", data=paginated(INVOICE_LIST_ITEM_EXAMPLE)),
+        ok_example("No Invoices", "Invoices fetched.", data=paginated()),
+      ),
+      401: UNAUTHORIZED_RESPONSE,
+      403: NOT_SUPPLIER_RESPONSE,
+      404: INVOICE_PAGE_NOT_FOUND_RESPONSE,
+    },
+  ),
+)
+
+supplier_invoice_detail_docs = extend_schema_view(
+  get=extend_schema(
+    operation_id="procurement_supplier_invoices_retrieve",
+    summary="Supplier: Get Invoice",
+    description=(
+      "One of the supplier's invoices with its lines, both parties' details and the "
+      "shipment dates. " + INVOICE_NOTE
+      + " Supplier only; an invoice of another supplier returns a 404."
+    ),
+    responses={
+      200: resp(
+        "Invoice details.",
+        ok_example("Invoice", "Invoice fetched.", data=INVOICE_DETAIL_EXAMPLE),
+      ),
+      401: UNAUTHORIZED_RESPONSE,
+      403: NOT_SUPPLIER_RESPONSE,
+      404: INVOICE_NOT_FOUND_RESPONSE,
+    },
+  ),
+)
+
+
+GATEWAY_ERROR_RESPONSE = resp(
+  "Razorpay could not be reached or returned an error. Safe to retry.",
+  err_example(
+    "Gateway Error",
+    "Couldn't reach the payment gateway. Try again in a minute.",
+    "GATEWAY_ERROR",
+  ),
+)
+
+PAYMENTS_OFF_RESPONSE = resp(
+  "Razorpay keys are not configured on the server.",
+  err_example(
+    "Not Configured",
+    "Online payments aren't set up yet.",
+    "PAYMENTS_NOT_CONFIGURED",
+  ),
+)
+
+PAYMENT_EXAMPLE = {
+  "id": "8a1c4e72-5d3b-4f96-a0e8-7b2d9c6f1e35",
+  "amount": "1000.00",
+  "status": "created",
+  "razorpay_order_id": "order_PZ3k8sQm1vXy2a",
+  "razorpay_payment_id": None,
+  "failure_reason": "",
+  "refund_id": "",
+  "paid_at": None,
+  "created_at": "2026-10-13T10:02:00Z",
+}
+
+PAYMENT_PAID_EXAMPLE = {
+  **PAYMENT_EXAMPLE,
+  "status": "paid",
+  "razorpay_payment_id": "pay_PZ3lQw7tN4bR9c",
+  "paid_at": "2026-10-13T10:05:00Z",
+}
+
+PURCHASE_ORDER_ISSUED_EXAMPLE = {
+  **PURCHASE_ORDER_EXAMPLE,
+  "status": "issued",
+  "issued_at": "2026-10-13T10:05:00Z",
+}
+
+CHECKOUT_EXAMPLE = {
+  "key": "rzp_test_1DP5mmOlF5G5ag",
+  "order_id": "order_PZ3k8sQm1vXy2a",
+  "amount": 100000,
+  "currency": "INR",
+  "name": "Kosh",
+  "description": "Advance for PO-0001 - Sharma Traders",
+  "prefill": {"name": "Ravi Kumar", "email": "ravi@example.com"},
+  "notes": {"purchase_order_id": "2f6b9d04-7c1e-4a83-b5f2-9e0d3a8c6b17"},
+  "purchase_order_id": "2f6b9d04-7c1e-4a83-b5f2-9e0d3a8c6b17",
+  "advance_due_by": "2026-10-14T10:00:00Z",
+}
+
+ADVANCE_STATE_CONFLICT = (
+  err_example(
+    "Already Paid",
+    "The advance for this order is already paid.",
+    "ADVANCE_ALREADY_PAID",
+  ),
+  err_example("Order Cancelled", "This order was cancelled.", "ORDER_CANCELLED"),
+  err_example(
+    "Advance Expired",
+    "The time to pay this advance has run out.",
+    "ADVANCE_EXPIRED",
+  ),
+  err_example("No Advance", "This order has no advance to pay.", "NO_ADVANCE_DUE"),
+)
+
+po_advance_docs = extend_schema_view(
+  get=extend_schema(
+    operation_id="procurement_purchase_orders_advance_status",
+    summary="Advance Payment Status",
+    description=(
+      "Returns the purchase order and every payment attempt made for its advance, "
+      "newest first. Use it to refresh the screen after Checkout closes, or to show "
+      "the payment history. Payment `status` is `created` (Razorpay order open, not "
+      "paid yet), `paid`, `failed` (advance expired before payment) or `refunded` "
+      "(money arrived after the order was closed and was sent back; see `refund_id`). "
+      "`failure_reason` holds Razorpay's message for the last failed attempt. "
+      + OWNER_NOTE
+    ),
+    responses={
+      200: resp(
+        "Advance status.",
+        ok_example(
+          "Awaiting Payment",
+          "Advance status.",
+          data={"order": PURCHASE_ORDER_EXAMPLE, "payments": [PAYMENT_EXAMPLE]},
+        ),
+        ok_example(
+          "Paid",
+          "Advance status.",
+          data={
+            "order": PURCHASE_ORDER_ISSUED_EXAMPLE,
+            "payments": [PAYMENT_PAID_EXAMPLE],
+          },
+        ),
+      ),
+      401: UNAUTHORIZED_RESPONSE,
+      403: OWNER_ONLY_RESPONSE,
+      404: PO_NOT_FOUND_RESPONSE,
+    },
+  ),
+  post=extend_schema(
+    operation_id="procurement_purchase_orders_advance_start",
+    summary="Start Advance Payment",
+    description=(
+      "Creates a Razorpay order for the PO's advance and returns everything the "
+      "frontend passes to Razorpay Checkout (`key`, `order_id`, `amount`, `currency`, "
+      "`name`, `description`, `prefill`, `notes`). `amount` is in **paise** "
+      "(₹1000.00 = 100000). Calling it again while the advance is unpaid returns the "
+      "same `order_id`, so a double click or a retry never creates a second order.\n\n"
+      "The PO must be `awaiting_advance` and `advance_due_by` must not have passed. "
+      "After the owner pays, call **Verify Advance Payment** with the three "
+      "`razorpay_*` values from Checkout's success handler. If that call is lost, "
+      "Razorpay's webhook confirms the payment anyway. No request body is needed. "
+      + OWNER_NOTE
+    ),
+    request=None,
+    responses={
+      200: resp("Checkout ready.", ok_example("Checkout Ready", "Checkout ready.", data=CHECKOUT_EXAMPLE)),
+      401: UNAUTHORIZED_RESPONSE,
+      403: OWNER_ONLY_RESPONSE,
+      404: PO_NOT_FOUND_RESPONSE,
+      409: resp("The advance can't be paid now.", *ADVANCE_STATE_CONFLICT),
+      429: THROTTLED_RESPONSE,
+      502: GATEWAY_ERROR_RESPONSE,
+      503: PAYMENTS_OFF_RESPONSE,
+    },
+  ),
+)
+
+po_advance_verify_docs = extend_schema_view(
+  post=extend_schema(
+    operation_id="procurement_purchase_orders_advance_verify",
+    summary="Verify Advance Payment",
+    description=(
+      "Call this from Razorpay Checkout's success `handler` with the three values it "
+      "returns. The server checks the signature, fetches the payment from Razorpay, "
+      "captures it if it is only authorized, and checks the amount. The payment then "
+      "becomes `paid` and the PO becomes `issued`; the other quotations are rejected "
+      "and the supplier is notified.\n\n"
+      "Safe to call more than once: if the webhook already confirmed the payment, "
+      "the same result is returned. If the money arrived after the order was "
+      "cancelled, the response is still 200 but the PO stays `cancelled` and the "
+      "payment is refunded automatically. " + OWNER_NOTE
+    ),
+    request=AdvanceVerifySerializer,
+    examples=[
+      OpenApiExample(
+        "Checkout Response",
+        value={
+          "razorpay_order_id": "order_PZ3k8sQm1vXy2a",
+          "razorpay_payment_id": "pay_PZ3lQw7tN4bR9c",
+          "razorpay_signature": "9ef4dffbfd84f1318f6739a3ce19f9d85851857ae648f114332d8401e0949a3d",
+        },
+        request_only=True,
+      ),
+    ],
+    responses={
+      200: resp(
+        "Payment confirmed.",
+        ok_example(
+          "Order Issued",
+          "Advance paid. The order has been sent to the supplier.",
+          data=PURCHASE_ORDER_ISSUED_EXAMPLE,
+        ),
+        ok_example(
+          "Late Payment Refunded",
+          "Payment received, but this order was already closed. It will be refunded.",
+          data={**PURCHASE_ORDER_EXAMPLE, "status": "cancelled"},
+        ),
+      ),
+      400: resp(
+        "The payment could not be verified.",
+        err_example(
+          "Validation Error",
+          "Validation failed.",
+          "VALIDATION_ERROR",
+          errors={"razorpay_signature": ["This field is required."]},
+        ),
+        err_example("Bad Signature", "We couldn't verify this payment.", "INVALID_SIGNATURE"),
+        err_example(
+          "Wrong Order",
+          "This payment belongs to a different order.",
+          "ORDER_MISMATCH",
+        ),
+        err_example(
+          "Amount Mismatch",
+          "The paid amount doesn't match the advance.",
+          "AMOUNT_MISMATCH",
+        ),
+      ),
+      401: UNAUTHORIZED_RESPONSE,
+      403: OWNER_ONLY_RESPONSE,
+      404: resp(
+        "No payment with this `razorpay_order_id` on this PO in this business.",
+        err_example("Not Found", "Payment not found.", "PAYMENT_NOT_FOUND"),
+      ),
+      409: resp(
+        "Razorpay hasn't completed the payment yet.",
+        err_example(
+          "Not Captured",
+          "This payment isn't complete yet.",
+          "PAYMENT_NOT_CAPTURED",
+        ),
+      ),
+      429: THROTTLED_RESPONSE,
+      502: GATEWAY_ERROR_RESPONSE,
+      503: PAYMENTS_OFF_RESPONSE,
     },
   ),
 )

@@ -262,3 +262,56 @@ def rfq_awarded(rfq):
     kind=Kind.RFQ,
     push=False,
   )
+
+@safe
+def advance_paid(po):
+  notify(
+    po.business.owner,
+    f"Advance paid for {po.number}",
+    f"We received your advance of {rupees(po.advance_amount)}. "
+    f"{po.supplier_profile.company_name} has been sent the purchase order.",
+    kind=Kind.PAYMENT,
+  )
+
+
+@safe
+def advance_expired(po):
+  notify(
+    po.business.owner,
+    f"{po.number} cancelled: advance not paid",
+    f"The advance of {rupees(po.advance_amount)} wasn't paid by {when(po.advance_due_by)}, "
+    f"so the order was cancelled. You can accept a quotation for {po.rfq.number} again.",
+    kind=Kind.PAYMENT,
+  )
+
+
+@safe
+def advance_refunded(po, amount):
+  notify(
+    po.business.owner,
+    f"Refund started for {po.number}",
+    f"Your payment of {rupees(amount)} came in after the order was closed, "
+    f"so it's being refunded to the original payment method.",
+    kind=Kind.PAYMENT,
+  )
+def goods_dispatched(po, shipment, invoice):
+  sent = {s.purchase_order_item_id: s.quantity for s in shipment.items.all()}
+  short = []
+  for item in po.items.all():
+    gap = item.quantity - sent.get(item.id, 0)
+    if gap > 0:
+      short.append(f"{item.product_name} ({gap} short)")
+
+  body = (
+    f"{po.supplier_profile.company_name} dispatched {po.number}. "
+    f"Invoice {invoice.number} is {rupees(invoice.grand_total)}; "
+    f"{rupees(invoice.balance_due)} is due after delivery. "
+    f"Expected by {shipment.expected_delivery_date:%d %b %Y}."
+  )
+  if shipment.is_late:
+    body += f" That is {shipment.late_by_days} day(s) later than the order date."
+  if short:
+    body += " Less than ordered: " + list_names(short) + "."
+
+  title = f"{po.number} was dispatched" + (" (partial)" if short else "")
+  notify(po.business.owner, title, body, kind=Kind.PURCHASE_ORDER)
