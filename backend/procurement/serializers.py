@@ -462,6 +462,9 @@ class PurchaseOrderItemSerializer(serializers.ModelSerializer):
 
 
 def po_late_by_days(po):
+  shipment = getattr(po, "shipment", None)
+  if shipment is not None:
+    return shipment.late_by_days
   if po.status != PurchaseOrder.Status.ISSUED:
     return 0
   return max((timezone.localdate() - po.delivery_date).days, 0)
@@ -470,12 +473,15 @@ def po_late_by_days(po):
 class PurchaseOrderListSerializer(PurchaseOrderSummarySerializer):
   item_count = serializers.SerializerMethodField()
   total_quantity = serializers.SerializerMethodField()
+  dispatch_date = serializers.SerializerMethodField()
+  expected_delivery_date = serializers.SerializerMethodField()
   is_late = serializers.SerializerMethodField()
   late_by_days = serializers.SerializerMethodField()
 
   class Meta(PurchaseOrderSummarySerializer.Meta):
     fields = PurchaseOrderSummarySerializer.Meta.fields + [
-      "item_count", "total_quantity", "is_late", "late_by_days",
+      "item_count", "total_quantity", "dispatch_date", "expected_delivery_date",
+      "is_late", "late_by_days",
     ]
     read_only_fields = fields
 
@@ -484,6 +490,14 @@ class PurchaseOrderListSerializer(PurchaseOrderSummarySerializer):
 
   def get_total_quantity(self, obj):
     return sum(item.quantity for item in obj.items.all())
+
+  def get_dispatch_date(self, obj):
+    shipment = getattr(obj, "shipment", None)
+    return shipment.dispatched_at if shipment else None
+
+  def get_expected_delivery_date(self, obj):
+    shipment = getattr(obj, "shipment", None)
+    return shipment.expected_delivery_date if shipment else obj.delivery_date
 
   def get_late_by_days(self, obj):
     return po_late_by_days(obj)
@@ -506,10 +520,13 @@ class PurchaseOrderDetailSerializer(PurchaseOrderListSerializer):
   supplier = serializers.SerializerMethodField()
   buyer = serializers.SerializerMethodField()
   advance_paid = serializers.SerializerMethodField()
+  shipment = serializers.SerializerMethodField()
+  invoice = serializers.SerializerMethodField()
 
   class Meta(PurchaseOrderListSerializer.Meta):
     fields = PurchaseOrderListSerializer.Meta.fields + [
       "cancelled_at", "advance_paid", "supplier", "buyer", "items",
+      "shipment", "invoice",
     ]
     read_only_fields = fields
 
@@ -521,6 +538,14 @@ class PurchaseOrderDetailSerializer(PurchaseOrderListSerializer):
 
   def get_buyer(self, obj):
     return buyer_details(obj.business)
+
+  def get_shipment(self, obj):
+    shipment = getattr(obj, "shipment", None)
+    return ShipmentSerializer(shipment).data if shipment else None
+
+  def get_invoice(self, obj):
+    invoice = getattr(obj, "invoice", None)
+    return InvoiceSummarySerializer(invoice).data if invoice else None
 
 class DispatchItemInputSerializer(serializers.Serializer):
   purchase_order_item = serializers.UUIDField()

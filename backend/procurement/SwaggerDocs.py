@@ -1336,6 +1336,8 @@ PURCHASE_ORDER_LIST_ITEM_EXAMPLE = {
   **PURCHASE_ORDER_NO_ADVANCE_EXAMPLE,
   "item_count": 2,
   "total_quantity": 140,
+  "dispatch_date": None,
+  "expected_delivery_date": "2026-10-15",
   "is_late": False,
   "late_by_days": 0,
 }
@@ -1360,6 +1362,8 @@ PURCHASE_ORDER_DETAIL_EXAMPLE = {
     "email": "ramesh@example.com",
   },
   "items": [PO_ITEM_EXAMPLE],
+  "shipment": None,
+  "invoice": None,
 }
 
 PO_PAGE_NOT_FOUND_RESPONSE = resp(
@@ -1377,8 +1381,14 @@ PO_FIELDS_NOTE = (
   "`status` is `awaiting_advance` (accepted, advance not paid yet), `issued` (the "
   "supplier can see it), `dispatched`, `partially_received`, `received` or "
   "`cancelled`. `balance_amount` is the grand total minus the advance, due after "
-  "delivery. `is_late` is true while an `issued` order is past its `delivery_date`; "
-  "`late_by_days` says by how many days."
+  "delivery. `dispatch_date` is when the supplier dispatched the order (null until "
+  "then). `expected_delivery_date` is the supplier's current expected date once "
+  "dispatched, otherwise the order's `delivery_date`. `is_late` is true when the "
+  "order is past its `delivery_date` before dispatch, or when the supplier set an "
+  "expected date later than it at dispatch; `late_by_days` says by how many days. "
+  "In the order detail, `shipment` and `invoice` are null until the order is "
+  "dispatched; after that they have the same shape as in Supplier: Mark Order "
+  "Dispatched."
 )
 
 po_list_docs = extend_schema_view(
