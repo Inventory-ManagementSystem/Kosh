@@ -439,7 +439,9 @@ class Invoice(models.Model):
   tax_total = models.DecimalField(**MONEY, default=0)
   grand_total = models.DecimalField(**MONEY, default=0)
   advance_applied = models.DecimalField(**MONEY, default=0)
+  discrepancy_credit = models.DecimalField(**MONEY, default=0)
   balance_due = models.DecimalField(**MONEY, default=0)
+  refund_due = models.DecimalField(**MONEY, default=0)
 
   created_at = models.DateTimeField(auto_now_add=True)
   updated_at = models.DateTimeField(auto_now=True)
@@ -487,3 +489,93 @@ class InvoiceItem(models.Model):
 
   def __str__(self):
     return f"{self.product_name} x {self.quantity}"
+
+class GoodsReceipt(models.Model):
+  id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+  business = models.ForeignKey(
+    "accounts.Business", on_delete=models.CASCADE, related_name="goods_receipts"
+  )
+  purchase_order = models.OneToOneField(
+    PurchaseOrder, on_delete=models.PROTECT, related_name="goods_receipt"
+  )
+  number = models.CharField(max_length=20)
+  notes = models.TextField(blank=True, default="")
+  received_by = models.ForeignKey(
+    settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+    related_name="+",
+  )
+  created_at = models.DateTimeField(auto_now_add=True)
+
+  class Meta:
+    ordering = ["-created_at"]
+    indexes = [models.Index(fields=["business", "created_at"])]
+    constraints = [
+      models.UniqueConstraint(
+        fields=["business", "number"], name="uniq_grn_number_per_business"
+      ),
+    ]
+
+  def __str__(self):
+    return self.number
+
+
+class GoodsReceiptItem(models.Model):
+  id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+  goods_receipt = models.ForeignKey(
+    GoodsReceipt, on_delete=models.CASCADE, related_name="items"
+  )
+  purchase_order_item = models.ForeignKey(
+    PurchaseOrderItem, on_delete=models.PROTECT, related_name="receipt_items"
+  )
+  ordered_quantity = models.PositiveIntegerField()
+  dispatched_quantity = models.PositiveIntegerField()
+  received_quantity = models.PositiveIntegerField(default=0)
+  rejected_quantity = models.PositiveIntegerField(default=0)
+  credit_amount = models.DecimalField(**MONEY, default=0)
+  note = models.CharField(max_length=255, blank=True, default="")
+
+  class Meta:
+    constraints = [
+      models.UniqueConstraint(
+        fields=["goods_receipt", "purchase_order_item"], name="uniq_po_item_per_grn"
+      ),
+      models.CheckConstraint(
+        condition=models.Q(rejected_quantity__lte=models.F("received_quantity")),
+        name="grn_rejected_within_received",
+      ),
+    ]
+
+  @property
+  def accepted_quantity(self):
+    return self.received_quantity - self.rejected_quantity
+
+  def __str__(self):
+    return f"{self.purchase_order_item.product_name} x {self.received_quantity}"
+
+
+class GoodsReceiptDiscrepancy(models.Model):
+  class Kind(models.TextChoices):
+    SHORT_SHIPPED = "short_shipped", "Shipped less than ordered"
+    SHORT_RECEIVED = "short_received", "Received less than shipped"
+    REJECTED = "rejected", "Rejected or damaged"
+    EXCESS = "excess", "Received more than shipped"
+
+  id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+  goods_receipt = models.ForeignKey(
+    GoodsReceipt, on_delete=models.CASCADE, related_name="discrepancies"
+  )
+  receipt_item = models.ForeignKey(
+    GoodsReceiptItem, on_delete=models.CASCADE, related_name="discrepancies"
+  )
+  kind = models.CharField(max_length=20, choices=Kind.choices)
+  quantity = models.PositiveIntegerField(validators=[MinValueValidator(1)])
+
+  class Meta:
+    constraints = [
+      models.UniqueConstraint(
+        fields=["receipt_item", "kind"], name="uniq_discrepancy_kind_per_item"
+      ),
+    ]
+
+  def __str__(self):
+    return f"{self.kind} x {self.quantity}"

@@ -1540,11 +1540,13 @@ INVOICE_SUMMARY_EXAMPLE = {
   "status": "unpaid",
   "issue_date": "2026-10-14",
   "purchase_order_id": "2f6b9d04-7c1e-4a83-b5f2-9e0d3a8c6b17",
-  "subtotal": "3140.00",
-  "tax_total": "157.00",
-  "grand_total": "3297.00",
+  "subtotal": "4140.00",
+  "tax_total": "207.00",
+  "grand_total": "4347.00",
   "advance_applied": "1000.00",
-  "balance_due": "2297.00",
+  "balance_due": "3347.00",
+  "discrepancy_credit": "0.00",
+  "refund_due": "0.00",
 }
 
 ORDER_NOT_FOUND_FOR_SUPPLIER_RESPONSE = resp(
@@ -1691,6 +1693,13 @@ INVOICE_DETAIL_EXAMPLE = {
   ],
 }
 
+INVOICE_AFTER_RECEIPT_EXAMPLE = {
+  **INVOICE_DETAIL_EXAMPLE,
+  "discrepancy_credit": "315.00",
+  "balance_due": "3032.00",
+  "refund_due": "0.00",
+}
+
 INVOICE_NOTE = (
   "Invoices are generated automatically when the supplier marks an order as "
   "dispatched; nobody types them. The invoice is the supplier's bill, issued to "
@@ -1698,6 +1707,11 @@ INVOICE_NOTE = (
   "advance already paid on the order and `balance_due` is what is left to pay after "
   "delivery. `status` is `unpaid` or `paid`. Numbers run per supplier (INV-0001, "
   "INV-0002, ...)."
+  "`discrepancy_credit` is 0 until the buyer confirms delivery with a goods "
+  "receipt. `refund_due` is the part of the advance the supplier owes back. It is "
+  "set at dispatch when the advance exceeds the dispatched value, and the receipt "
+  "can only increase it. The receipt recalculates `discrepancy_credit`, "
+  "`balance_due` (total minus credit minus advance applied) and `refund_due`. "
 )
 
 INVOICE_NOT_FOUND_RESPONSE = resp(
@@ -1749,7 +1763,9 @@ invoice_detail_docs = extend_schema_view(
     responses={
       200: resp(
         "Invoice details.",
-        ok_example("Invoice", "Invoice fetched.", data=INVOICE_DETAIL_EXAMPLE),
+        ok_example("At Dispatch", "Invoice fetched.", data=INVOICE_DETAIL_EXAMPLE),
+        ok_example(
+          "After Goods Receipt", "Invoice fetched.", data=INVOICE_AFTER_RECEIPT_EXAMPLE),
       ),
       401: UNAUTHORIZED_RESPONSE,
       403: FORBIDDEN_RESPONSE,
@@ -1792,7 +1808,9 @@ supplier_invoice_detail_docs = extend_schema_view(
     responses={
       200: resp(
         "Invoice details.",
-        ok_example("Invoice", "Invoice fetched.", data=INVOICE_DETAIL_EXAMPLE),
+        ok_example("At Dispatch", "Invoice fetched.", data=INVOICE_DETAIL_EXAMPLE),
+        ok_example(
+          "After Goods Receipt", "Invoice fetched.", data=INVOICE_AFTER_RECEIPT_EXAMPLE),
       ),
       401: UNAUTHORIZED_RESPONSE,
       403: NOT_SUPPLIER_RESPONSE,
