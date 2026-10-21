@@ -17,6 +17,9 @@ from .models import (
     ShipmentItem,
     Invoice,
     InvoiceItem,
+    GoodsReceipt,
+    GoodsReceiptDiscrepancy,
+    GoodsReceiptItem,
     Payment,
     Payout,
 )
@@ -617,6 +620,7 @@ class InvoiceSummarySerializer(serializers.ModelSerializer):
     fields = [
       "id", "number", "status", "issue_date", "purchase_order_id",
       "subtotal", "tax_total", "grand_total", "advance_applied", "balance_due",
+      "discrepancy_credit", "refund_due"
     ]
     read_only_fields = fields
 
@@ -713,3 +717,123 @@ class PayoutSerializer(serializers.ModelSerializer):
       "sent_at", "processed_at", "created_at",
     ]
     read_only_fields = fields
+MAX_QUANTITY = 1_000_000
+ 
+ 
+def staff_name(user):
+  if user is None:
+    return None
+  return getattr(getattr(user, "profile", None), "name", "") or user.email
+
+ 
+class GoodsReceiptLineSerializer(serializers.Serializer):
+  purchase_order_item = serializers.UUIDField()
+  received_quantity = serializers.IntegerField(min_value=0, max_value=MAX_QUANTITY)
+  rejected_quantity = serializers.IntegerField(
+    min_value=0, max_value=MAX_QUANTITY, default=0
+  )
+  note = serializers.CharField(max_length=255, allow_blank=True, default="")
+ 
+ 
+class GoodsReceiptCreateSerializer(serializers.Serializer):
+  items = GoodsReceiptLineSerializer(many=True, allow_empty=False)
+  notes = serializers.CharField(max_length=1000, allow_blank=True, default="")
+ 
+
+ 
+class GoodsReceiptDiscrepancySerializer(serializers.ModelSerializer):
+  kind_label = serializers.CharField(source="get_kind_display", read_only=True)
+ 
+  class Meta:
+    model = GoodsReceiptDiscrepancy
+    fields = ["kind", "kind_label", "quantity"]
+ 
+ 
+class GoodsReceiptItemSerializer(serializers.ModelSerializer):
+  product_name = serializers.CharField(
+    source="purchase_order_item.product_name", read_only=True
+  )
+  sku = serializers.CharField(source="purchase_order_item.sku", read_only=True)
+  accepted_quantity = serializers.IntegerField(read_only=True)
+  discrepancies = GoodsReceiptDiscrepancySerializer(many=True, read_only=True)
+ 
+  class Meta:
+    model = GoodsReceiptItem
+    fields = [
+      "id",
+      "purchase_order_item",
+      "product_name",
+      "sku",
+      "ordered_quantity",
+      "dispatched_quantity",
+      "received_quantity",
+      "rejected_quantity",
+      "accepted_quantity",
+      "credit_amount",
+      "note",
+      "discrepancies",
+    ]
+ 
+ 
+class GoodsReceiptSettlementSerializer(serializers.ModelSerializer):
+ 
+  class Meta:
+    model = Invoice
+    fields = [
+      "id",
+      "number",
+      "status",
+      "grand_total",
+      "discrepancy_credit",
+      "advance_applied",
+      "balance_due",
+      "refund_due",
+    ]
+ 
+ 
+class GoodsReceiptListSerializer(serializers.ModelSerializer):
+  purchase_order_id = serializers.UUIDField(read_only=True)
+  purchase_order_number = serializers.CharField(
+    source="purchase_order.number", read_only=True
+  )
+  supplier_name = serializers.CharField(
+    source="purchase_order.supplier_profile.company_name", read_only=True
+  )
+  business_name = serializers.CharField(
+    source="business.business_name", read_only=True
+  )
+  received_at = serializers.DateTimeField(source="created_at", read_only=True)
+  discrepancy_count = serializers.SerializerMethodField()
+  settlement = GoodsReceiptSettlementSerializer(
+    source="purchase_order.invoice", read_only=True
+  )
+ 
+  class Meta:
+    model = GoodsReceipt
+    fields = [
+      "id",
+      "number",
+      "purchase_order_id",
+      "purchase_order_number",
+      "supplier_name",
+      "business_name",
+      "received_at",
+      "discrepancy_count",
+      "settlement",
+    ]
+ 
+  def get_discrepancy_count(self, obj) -> int:
+    return len(obj.discrepancies.all())
+ 
+ 
+class GoodsReceiptDetailSerializer(GoodsReceiptListSerializer):
+  received_by = serializers.SerializerMethodField()
+  items = GoodsReceiptItemSerializer(many=True, read_only=True)
+ 
+  class Meta(GoodsReceiptListSerializer.Meta):
+    fields = GoodsReceiptListSerializer.Meta.fields + ["notes", "received_by", "items"]
+ 
+  def get_received_by(self, obj) -> str | None:
+    if not self.context.get("show_staff"):
+      return None
+    return staff_name(obj.received_by)

@@ -116,6 +116,7 @@ def mark_dispatched(
     grand_total=grand_total,
     advance_applied=advance_applied,
     balance_due=grand_total - advance_applied,
+    refund_due=po.advance_amount - advance_applied,
   )
   InvoiceItem.objects.bulk_create([
     InvoiceItem(
