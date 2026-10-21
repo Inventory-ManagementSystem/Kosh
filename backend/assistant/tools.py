@@ -8,6 +8,8 @@ from django.db.models import Count, DecimalField, F, Q, Sum
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 
+from accounts.models import Employee, EmployeeInvite
+from accounts.utils import invite_cutoff
 from customers.models import Customer
 from inventory.models import Category, DispatchItem, DispatchNote, Product, StockMovement
 from inventory.reorder import calculate_reorder, get_dispatch_stats
@@ -731,6 +733,63 @@ def get_receiving_issues(business, days=30, supplier=None, limit=15):
   }
 
 
+def _activity_counts(queryset, user_field, user_ids, since):
+  rows = (
+    queryset.filter(**{f"{user_field}__in": user_ids, "created_at__gte": since})
+    .values(user_field).annotate(count=Count("pk"))
+  )
+  return {row[user_field]: row["count"] for row in rows}
+
+
+def list_employees(business, days=30):
+  days = _days(days)
+  since = timezone.now() - timedelta(days=days)
+  employees = list(
+    Employee.objects.filter(business=business)
+    .select_related("user__profile")
+    .order_by("created_at")
+  )
+  user_ids = [e.user_id for e in employees]
+  stock = _activity_counts(
+    StockMovement.objects.filter(business=business), "created_by", user_ids, since
+  )
+  dispatches = _activity_counts(
+    DispatchNote.objects.filter(business=business), "created_by", user_ids, since
+  )
+  receipts = _activity_counts(
+    GoodsReceipt.objects.filter(business=business), "received_by", user_ids, since
+  )
+
+  rows = []
+  for e in employees:
+    profile = getattr(e.user, "profile", None)
+    rows.append({
+      "name": getattr(profile, "name", None) or e.user.get_full_name() or None,
+      "email": e.user.email,
+      "phone": e.phone,
+      "active": e.is_active,
+      "joined_on": e.created_at,
+      "activity_last_period": {
+        "stock_changes": stock.get(e.user_id, 0),
+        "dispatch_notes": dispatches.get(e.user_id, 0),
+        "goods_receipts": receipts.get(e.user_id, 0),
+      },
+    })
+
+  invites = EmployeeInvite.objects.filter(
+    business=business, status="pending", created_at__gte=invite_cutoff()
+  ).order_by("-created_at")
+  return {
+    "period_days": days,
+    "employee_count": len(rows),
+    "employees": rows,
+    "pending_invites": [
+      {"email": i.email, "phone": i.phone, "sent_on": i.created_at} for i in invites
+    ],
+    "note": "Removed employees are deleted, so they are not listed. Invites expire after 14 days.",
+  }
+
+
 TOOL_FUNCTIONS = {
   "get_app_help": get_app_help,
   "get_business_insights": get_business_insights,
@@ -748,6 +807,7 @@ TOOL_FUNCTIONS = {
   "get_purchase_order": get_purchase_order,
   "list_invoices": list_invoices,
   "get_receiving_issues": get_receiving_issues,
+  "list_employees": list_employees,
 }
 
 _LIMIT = {"type": "INTEGER", "description": f"Max rows to return (1-{MAX_LIMIT})."}
@@ -953,6 +1013,15 @@ TOOL_DECLARATIONS = [
     },
   },
   {
+    "name": "list_employees",
+    "description": (
+      "The business's employees (name, email, phone, active, joined date) with how many "
+      "stock changes, dispatch notes and goods receipts each recorded in the period, plus "
+      "pending employee invites."
+    ),
+    "parameters": {"type": "OBJECT", "properties": {"days": _DAYS}},
+  },
+  {
     "name": "get_receiving_issues",
     "description": (
       "Problems found when goods were received: short shipped, short received, rejected or "
@@ -971,7 +1040,7 @@ TOOL_DECLARATIONS = [
 
 
 
-OWNER_ONLY_TOOLS = {"get_rfq_quotations", "list_invoices"}
+OWNER_ONLY_TOOLS = {"get_rfq_quotations", "list_invoices", "list_employees"}
 
 PRICE_FIELDS = {
   "price", "cost_price", "unit_price", "gst_rate",
@@ -1003,7 +1072,7 @@ def execute_tool(name, args, business, is_owner=True):
   if func is None:
     return {"error": f"Unknown tool '{name}'."}
   if not is_owner and name in OWNER_ONLY_TOOLS:
-    return {"error": "Only the business owner can see quotations, invoices, prices and costs."}
+    return {"error": "Only the business owner can see this information."}
   args = dict(args or {})
   try:
     inspect.signature(func).bind(business, **args)

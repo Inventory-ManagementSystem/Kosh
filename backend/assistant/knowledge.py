@@ -18,7 +18,7 @@ and NO permission settings — what each role can do is fixed.
   - create RFQs from reorder alerts, dismiss or refresh reorder alerts, cancel RFQs
   - accept a supplier's quotation (this creates a purchase order)
   - pay the advance for a purchase order, or cancel an order whose advance is unpaid
-  - invite and remove employees
+  - invite and remove employees, and see the employee list and pending invites
 - Receives low-stock and procurement notifications.
 
 ### Employee
