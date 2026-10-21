@@ -308,6 +308,11 @@ def goods_dispatched(po, shipment, invoice):
     f"{rupees(invoice.balance_due)} is due after delivery. "
     f"Expected by {shipment.expected_delivery_date:%d %b %Y}."
   )
+  if invoice.refund_due > 0:
+    body += (
+      f" The advance was {rupees(invoice.refund_due)} more than this invoice, "
+      "so that amount is owed back."
+    )
   if shipment.is_late:
     body += f" That is {shipment.late_by_days} day(s) later than the order date."
   if short:
@@ -315,3 +320,28 @@ def goods_dispatched(po, shipment, invoice):
 
   title = f"{po.number} was dispatched" + (" (partial)" if short else "")
   notify(po.business.owner, title, body, kind=Kind.PURCHASE_ORDER)
+
+@safe
+def goods_received(po, grn, invoice):
+  labels = {"short_received": "missing", "rejected": "rejected", "excess": "extra"}
+  issues = [
+    f"{d.receipt_item.purchase_order_item.product_name} ({d.quantity} {labels[d.kind]})"
+    for d in grn.discrepancies.select_related("receipt_item__purchase_order_item")
+    if d.kind in labels
+  ]
+
+  body = f"{po.business.business_name} confirmed delivery of {po.number} ({grn.number})."
+  if invoice.discrepancy_credit > 0:
+    body += (
+      f" {rupees(invoice.discrepancy_credit)} was credited on {invoice.number}; "
+      f"balance due is now {rupees(invoice.balance_due)}."
+    )
+  else:
+    body += f" Balance due on {invoice.number}: {rupees(invoice.balance_due)}."
+  if invoice.refund_due > 0:
+    body += f" {rupees(invoice.refund_due)} of the advance is owed back."
+  if issues:
+    body += " Issues: " + list_names(issues) + "."
+
+  title = f"{po.number} was received" + (" (with issues)" if issues else "")
+  notify(po.supplier_profile.user, title, body, kind=Kind.PURCHASE_ORDER)
