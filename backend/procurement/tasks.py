@@ -8,9 +8,10 @@ from accounts.models import Business
 from notifications import events
 
 from .alert_services import create_alerts_for_business
-from .models import RFQ, PurchaseOrder, ReorderSuggestion
+from .models import RFQ, PurchaseOrder, ReorderSuggestion, Payout
 from .payment_services import PaymentError, expire_advance, refund_payment
 from .rfq_services import RFQCreationError, create_rfqs_for_suggestions
+from .payout_services import PayoutError, send_payout, sync_payout
 
 logger = logging.getLogger(__name__)
 
@@ -118,3 +119,32 @@ def refund_advance_payment(self, payment_pk):
     return refund_payment(payment_pk)
   except PaymentError as err:
     raise self.retry(exc=err)
+
+@shared_task(bind=True, max_retries=5, default_retry_delay=120)
+def send_advance_payout(self, payout_pk):
+  try:
+    send_payout(payout_pk)
+  except PayoutError as err:
+    raise self.retry(exc=err)
+
+
+@shared_task
+def sync_payouts():
+  now = timezone.now()
+  stuck = Payout.objects.filter(
+    status=Payout.Status.PENDING, updated_at__lte=now - timedelta(minutes=10)
+  ).values_list("pk", flat=True)
+  for payout_pk in list(stuck):
+    send_advance_payout.delay(str(payout_pk))
+
+  in_flight = Payout.objects.filter(
+    status=Payout.Status.PROCESSING, updated_at__lte=now - timedelta(minutes=30)
+  ).values_list("pk", flat=True)
+  synced = 0
+  for payout_pk in list(in_flight):
+    try:
+      sync_payout(payout_pk)
+      synced += 1
+    except Exception:
+      logger.exception("Couldn't sync payout %s", payout_pk)
+  return synced

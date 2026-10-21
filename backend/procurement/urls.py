@@ -31,5 +31,7 @@ urlpatterns = [
   path("invoices/<uuid:pk>/", views.InvoiceDetailApi.as_view(), name="invoice-detail"),
   path("supplier/invoices/", views.SupplierInvoiceListApi.as_view(), name="supplier-invoice-list"),
   path("supplier/invoices/<uuid:pk>/", views.SupplierInvoiceDetailApi.as_view(), name="supplier-invoice-detail"),
-  
+  path("payouts/", views.PayoutListApi.as_view(), name="payout-list"),
+  path("supplier/payouts/", views.SupplierPayoutListApi.as_view(), name="supplier-payout-list"),
+  path("payouts/razorpayx/webhook/", views.RazorpayXWebhookApi.as_view(), name="razorpayx-webhook"),
 ]

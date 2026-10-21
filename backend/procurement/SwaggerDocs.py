@@ -2018,3 +2018,79 @@ po_advance_verify_docs = extend_schema_view(
     },
   ),
 )
+
+PAYOUT_NOTE = (
+  "A payout is the advance Kosh collected from the owner, sent on to the supplier "
+  "through RazorpayX automatically when the supplier marks the order dispatched "
+  "(that also creates the invoice). `status` is `on_hold` (the supplier hasn't added "
+  "payout details yet), `pending` (about to be sent), `processing` (RazorpayX accepted "
+  "it), `processed` (money credited; `utr` is the bank reference) or `failed` "
+  "(`failure_reason` says why; the money stays with Kosh and is retried when the "
+  "supplier saves their payout details again). `mode` is `IMPS`, `NEFT` or `UPI`."
+)
+
+PAYOUT_EXAMPLE = {
+  "id": "5b2e7c90-1d4a-4f38-9e61-8a3c0d7f2b45",
+  "purchase_order_id": "2f6b9d04-7c1e-4a83-b5f2-9e0d3a8c6b17",
+  "po_number": "PO-0001",
+  "invoice_id": "7c1d9e2a-4b6f-4c0e-8d3a-1f5e9b2c7a60",
+  "invoice_number": "INV-0001",
+  "company_name": "Sharma Traders",
+  "amount": "1000.00",
+  "status": "processed",
+  "mode": "IMPS",
+  "utr": "430211234567",
+  "failure_reason": "",
+  "sent_at": "2026-10-16T10:00:05Z",
+  "processed_at": "2026-10-16T10:00:40Z",
+  "created_at": "2026-10-16T10:00:00Z",
+}
+
+PAYOUT_STATUS_PARAMETER = OpenApiParameter(
+  "status", OpenApiTypes.STR, OpenApiParameter.QUERY,
+  description="`on_hold`, `pending`, `processing`, `processed` or `failed`. Any other value is ignored.",
+)
+
+payout_list_docs = extend_schema_view(
+  get=extend_schema(
+    operation_id="procurement_payouts_list",
+    summary="List Supplier Payouts",
+    description=(
+      "Advance payouts sent to suppliers for this business's orders, newest first, "
+      "paginated. " + PAYOUT_NOTE + " " + OWNER_NOTE
+    ),
+    parameters=[PAYOUT_STATUS_PARAMETER, *PAGE_PARAMETERS],
+    responses={
+      200: resp(
+        "Paginated payout list.",
+        ok_example("Payouts", "Payouts fetched.", data=paginated(PAYOUT_EXAMPLE)),
+        ok_example("No Payouts", "Payouts fetched.", data=paginated()),
+      ),
+      401: UNAUTHORIZED_RESPONSE,
+      403: OWNER_ONLY_RESPONSE,
+      404: INVOICE_PAGE_NOT_FOUND_RESPONSE,
+    },
+  ),
+)
+
+supplier_payout_list_docs = extend_schema_view(
+  get=extend_schema(
+    operation_id="procurement_supplier_payouts_list",
+    summary="Supplier: List My Payouts",
+    description=(
+      "Money Kosh has sent (or is sending) to the logged-in supplier, newest first, "
+      "paginated. " + PAYOUT_NOTE + " Supplier only."
+    ),
+    parameters=[PAYOUT_STATUS_PARAMETER, *PAGE_PARAMETERS],
+    responses={
+      200: resp(
+        "Paginated payout list.",
+        ok_example("Payouts", "Payouts fetched.", data=paginated(PAYOUT_EXAMPLE)),
+        ok_example("No Payouts", "Payouts fetched.", data=paginated()),
+      ),
+      401: UNAUTHORIZED_RESPONSE,
+      403: NOT_SUPPLIER_RESPONSE,
+      404: INVOICE_PAGE_NOT_FOUND_RESPONSE,
+    },
+  ),
+)

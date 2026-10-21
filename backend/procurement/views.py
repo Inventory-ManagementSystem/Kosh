@@ -53,10 +53,12 @@ from .SwaggerDocs import (
   invoice_detail_docs,
   supplier_invoice_list_docs,
   supplier_invoice_detail_docs,
+  payout_list_docs,
+  supplier_payout_list_docs,
 
 )
 
-from .models import RFQ, Quotation, RFQRecipient, ReorderSuggestion, PurchaseOrder, Shipment, Invoice
+from .models import RFQ, Quotation, RFQRecipient, ReorderSuggestion, PurchaseOrder, Shipment, Invoice, Payout
 from .serializers import (
   OwnerQuotationSerializer,
   QuotationSerializer,
@@ -79,8 +81,10 @@ from .serializers import (
   InvoiceSummarySerializer,
   InvoiceListSerializer,
   InvoiceDetailSerializer,
+  PayoutSerializer,
 
 )
+from .payout_services import PayoutWebhookError, PayoutError, handle_payout_webhook
 from .services import (
   QuotationError,
   decline_rfq,
@@ -810,3 +814,55 @@ class SupplierInvoiceDetailApi(APIView):
       invoice_queryset(Invoice.objects.filter(supplier_profile=request.supplier)), pk=pk
     )
     return success_response("Invoice fetched.", InvoiceDetailSerializer(invoice).data)
+
+def payout_queryset(base):
+  return base.select_related("purchase_order", "invoice", "supplier_profile")
+
+
+def filter_payout_status(request, qs):
+  status_param = request.query_params.get("status")
+  if status_param in Payout.Status.values:
+    qs = qs.filter(status=status_param)
+  return qs
+
+
+@payout_list_docs
+class PayoutListApi(APIView):
+  permission_classes = [HasBusinessAccess, IsOwner]
+
+  def get(self, request):
+    qs = payout_queryset(Payout.objects.filter(purchase_order__business=request.business))
+    qs = filter_payout_status(request, qs)
+    return paginated_response(request, qs, PayoutSerializer, "Payouts fetched.")
+
+
+@supplier_payout_list_docs
+class SupplierPayoutListApi(APIView):
+  permission_classes = [IsAuthenticated, IsSupplier]
+
+  def get(self, request):
+    qs = payout_queryset(Payout.objects.filter(supplier_profile=request.supplier))
+    qs = filter_payout_status(request, qs)
+    return paginated_response(request, qs, PayoutSerializer, "Payouts fetched.")
+
+
+@extend_schema(exclude=True)
+class RazorpayXWebhookApi(APIView):
+  authentication_classes = []
+  permission_classes = [AllowAny]
+  throttle_classes = []
+
+  def post(self, request):
+    raw = request.body
+    signature = request.headers.get("X-Razorpay-Signature", "")
+    try:
+      result = handle_payout_webhook(raw, signature)
+    except PayoutWebhookError:
+      return Response({"detail": "invalid signature"}, status=status.HTTP_400_BAD_REQUEST)
+    except PayoutError as err:
+      logger.error("RazorpayX webhook not applied: %s (%s)", err.message, err.code)
+      return Response({"detail": "retry"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+    except Exception:
+      logger.exception("RazorpayX webhook crashed")
+      return Response({"detail": "error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    return Response({"status": result})

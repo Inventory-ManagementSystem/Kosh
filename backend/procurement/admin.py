@@ -1,7 +1,7 @@
 from django.contrib import admin
 
 # Register your models here.
-from .models import Quotation, QuotationItem
+from .models import Quotation, QuotationItem, Payout
 
 class QuotationItemInline(admin.TabularInline):
   model = QuotationItem
@@ -22,3 +22,13 @@ class QuotationAdmin(admin.ModelAdmin):
     "revision", "submitted_at", "created_at", "updated_at",
   ]
   inlines = [QuotationItemInline]
+
+@admin.register(Payout)
+class PayoutAdmin(admin.ModelAdmin):
+  list_display = ["purchase_order", "supplier_profile", "amount", "status", "mode", "utr", "created_at"]
+  list_filter = ["status", "mode"]
+  search_fields = ["purchase_order__number", "supplier_profile__company_name", "razorpay_payout_id", "utr"]
+  readonly_fields = [f.name for f in Payout._meta.fields]
+
+  def has_add_permission(self, request):
+    return False

@@ -84,3 +84,27 @@ class Supplier(models.Model):
 
     def __str__(self):
         return self.email
+
+
+class SupplierPayoutAccount(models.Model):
+
+    class Method(models.TextChoices):
+        BANK_ACCOUNT = "bank_account", "Bank account"
+        UPI = "vpa", "UPI"
+
+    supplier_profile = models.OneToOneField(
+        SupplierProfile, on_delete=models.CASCADE, related_name="payout_account"
+    )
+    method = models.CharField(max_length=20, choices=Method.choices)
+    account_holder_name = models.CharField(max_length=120, blank=True, default="")
+    ifsc = models.CharField(max_length=11, blank=True, default="")
+    bank_name = models.CharField(max_length=100, blank=True, default="")
+    account_last4 = models.CharField(max_length=4, blank=True, default="")
+    vpa = models.CharField(max_length=100, blank=True, default="")
+    razorpay_contact_id = models.CharField(max_length=40)
+    razorpay_fund_account_id = models.CharField(max_length=40)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.supplier_profile.company_name} ({self.get_method_display()})"
