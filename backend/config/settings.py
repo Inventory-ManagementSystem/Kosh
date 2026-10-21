@@ -63,6 +63,8 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
 RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID", "")
 RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET", "")
 RAZORPAY_WEBHOOK_SECRET = os.getenv("RAZORPAY_WEBHOOK_SECRET", "")
+RAZORPAYX_ACCOUNT_NUMBER = os.getenv("RAZORPAYX_ACCOUNT_NUMBER", "")
+RAZORPAYX_WEBHOOK_SECRET = os.getenv("RAZORPAYX_WEBHOOK_SECRET", "")
 
 # Application definition
 SITE_ID=1
@@ -199,6 +201,10 @@ CELERY_BEAT_SCHEDULE = {
     "cancel-expired-unpaid-orders": {
         "task": "procurement.tasks.cancel_expired_unpaid_orders",
         "schedule": crontab(minute="*/15"),
+    },
+    "sync-payouts": {
+        "task": "procurement.tasks.sync_payouts",
+        "schedule": crontab(minute="*/30"),
     },
 }
 

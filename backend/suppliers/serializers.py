@@ -2,7 +2,7 @@ import re
 
 from rest_framework import serializers
 from accounts.validators import validate_phone_number
-from .models import SupplierProfile, SupplyCategory, Supplier
+from .models import SupplierProfile, SupplyCategory, Supplier, SupplierPayoutAccount
 
 
 GSTIN_REGEX = re.compile(r"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$") 
@@ -176,4 +176,53 @@ class OwnerSupplierSerializer(serializers.ModelSerializer):
       user__email__iexact=validated_data["email"]
     ).first()
     return super().create(validated_data)
-  
+
+IFSC_REGEX = re.compile(r"^[A-Z]{4}0[A-Z0-9]{6}$")
+VPA_REGEX = re.compile(r"^[A-Za-z0-9.\-]+@[A-Za-z0-9.\-]+$")
+
+
+class PayoutAccountInputSerializer(serializers.Serializer):
+  method = serializers.ChoiceField(choices=SupplierPayoutAccount.Method.choices)
+  account_holder_name = serializers.CharField(max_length=120, required=False, allow_blank=True)
+  ifsc = serializers.CharField(max_length=11, required=False, allow_blank=True)
+  account_number = serializers.CharField(max_length=24, required=False, allow_blank=True)
+  account_number_confirm = serializers.CharField(max_length=24, required=False, allow_blank=True)
+  vpa = serializers.CharField(max_length=100, required=False, allow_blank=True)
+
+  def validate(self, attrs):
+    method = attrs["method"]
+    if method == SupplierPayoutAccount.Method.BANK_ACCOUNT:
+      errors = {}
+      name = " ".join((attrs.get("account_holder_name") or "").split())
+      if len(name) < 3:
+        errors["account_holder_name"] = ["Enter the name on the bank account."]
+      ifsc = (attrs.get("ifsc") or "").strip().upper()
+      if not IFSC_REGEX.match(ifsc):
+        errors["ifsc"] = ["Enter a valid 11-character IFSC, e.g. HDFC0001234."]
+      number = re.sub(r"\s", "", attrs.get("account_number") or "")
+      confirm = re.sub(r"\s", "", attrs.get("account_number_confirm") or "")
+      if not re.fullmatch(r"[0-9]{9,18}", number):
+        errors["account_number"] = ["Enter a valid account number (9 to 18 digits)."]
+      elif confirm != number:
+        errors["account_number_confirm"] = ["The account numbers don't match."]
+      if errors:
+        raise serializers.ValidationError(errors)
+      return {
+        "method": method, "account_holder_name": name,
+        "ifsc": ifsc, "account_number": number,
+      }
+
+    vpa = (attrs.get("vpa") or "").strip()
+    if not (3 <= len(vpa) <= 100 and vpa.count("@") == 1 and VPA_REGEX.match(vpa)):
+      raise serializers.ValidationError({"vpa": ["Enter a valid UPI ID, e.g. name@okhdfcbank."]})
+    return {"method": method, "vpa": vpa}
+
+
+class PayoutAccountSerializer(serializers.ModelSerializer):
+  class Meta:
+    model = SupplierPayoutAccount
+    fields = [
+      "method", "account_holder_name", "bank_name", "ifsc", "account_last4",
+      "vpa", "updated_at",
+    ]
+    read_only_fields = fields
