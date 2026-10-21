@@ -11,7 +11,16 @@ from django.utils import timezone
 from customers.models import Customer
 from inventory.models import Category, DispatchItem, DispatchNote, Product, StockMovement
 from inventory.reorder import calculate_reorder, get_dispatch_stats
-from procurement.models import RFQ, Quotation, ReorderSuggestion
+from procurement.models import (
+  RFQ,
+  GoodsReceipt,
+  GoodsReceiptDiscrepancy,
+  Invoice,
+  Payment,
+  PurchaseOrder,
+  Quotation,
+  ReorderSuggestion,
+)
 from suppliers.models import Supplier
 from .knowledge import get_app_help
 
@@ -162,6 +171,8 @@ def get_business_insights(business, days=30):
   ).aggregate(units=Coalesce(Sum("quantity_change"), 0))["units"]
 
   dispatch = get_dispatch_summary(business, days=days)
+  orders = PurchaseOrder.objects.filter(business=business)
+  now = timezone.now()
   return {
     "period_days": days,
     "overview": get_inventory_overview(business),
@@ -185,6 +196,25 @@ def get_business_insights(business, days=30):
       "open_reorder_alerts": ReorderSuggestion.objects.filter(
         business=business, status__in=ReorderSuggestion.ACTIVE
       ).count(),
+    },
+    "purchase_orders": {
+      "awaiting_advance": orders.filter(status=PurchaseOrder.Status.AWAITING_ADVANCE).count(),
+      "advance_due_within_24h": orders.filter(
+        status=PurchaseOrder.Status.AWAITING_ADVANCE,
+        advance_due_by__lte=now + timedelta(hours=24),
+      ).count(),
+      "waiting_for_supplier_dispatch": orders.filter(status=PurchaseOrder.Status.ISSUED).count(),
+      "dispatched_not_received": orders.filter(status=PurchaseOrder.Status.DISPATCHED).count(),
+      "late_shipments": orders.filter(
+        status=PurchaseOrder.Status.DISPATCHED,
+        shipment__expected_delivery_date__gt=F("delivery_date"),
+      ).count(),
+      "receipts_with_issues": GoodsReceipt.objects.filter(
+        business=business, created_at__gte=since, discrepancies__isnull=False
+      ).distinct().count(),
+      "unpaid_invoice_balance": Invoice.objects.filter(
+        business=business, status=Invoice.Status.UNPAID
+      ).aggregate(total=_money_sum(F("balance_due")))["total"],
     },
   }
 
@@ -452,6 +482,255 @@ def search_customers(business, query="", limit=15):
   return {"total": customers.count(), "showing": len(rows), "customers": rows}
 
 
+def _related(obj, name):
+  try:
+    return getattr(obj, name)
+  except ObjectDoesNotExist:
+    return None
+
+
+def _advance_state(po):
+  if po.advance_amount <= 0:
+    return "no advance needed"
+  statuses = {p.status for p in po.payments.all()}
+  if Payment.Status.PAID.value in statuses:
+    return "advance paid"
+  if Payment.Status.REFUNDED.value in statuses:
+    return "advance refunded"
+  if po.status == PurchaseOrder.Status.CANCELLED:
+    return "advance not paid (order cancelled)"
+  return "advance not paid yet"
+
+
+NEXT_STEP = {
+  PurchaseOrder.Status.AWAITING_ADVANCE.value: (
+    "The owner must pay the advance before advance_due_by, otherwise Kosh cancels "
+    "the order automatically."
+  ),
+  PurchaseOrder.Status.ISSUED.value: "Waiting for the supplier to dispatch the goods.",
+  PurchaseOrder.Status.DISPATCHED.value: (
+    "Goods are on the way. When they arrive, record a goods receipt for this order."
+  ),
+  PurchaseOrder.Status.PARTIALLY_RECEIVED.value: "Some goods have been received.",
+  PurchaseOrder.Status.RECEIVED.value: "Completed: goods received and the invoice settled.",
+  PurchaseOrder.Status.CANCELLED.value: "Cancelled.",
+}
+
+
+def _order_queryset(business):
+  return (
+    PurchaseOrder.objects.filter(business=business)
+    .select_related("supplier_profile", "rfq")
+    .prefetch_related("payments")
+  )
+
+
+def _order_row(po):
+  return {
+    "number": po.number,
+    "status": po.get_status_display(),
+    "supplier": po.supplier_profile.company_name,
+    "rfq_number": po.rfq.number,
+    "delivery_date": po.delivery_date,
+    "grand_total": po.grand_total,
+    "advance_amount": po.advance_amount,
+    "advance": _advance_state(po),
+    "advance_due_by": (
+      po.advance_due_by if po.status == PurchaseOrder.Status.AWAITING_ADVANCE else None
+    ),
+    "created_at": po.created_at,
+  }
+
+
+def list_purchase_orders(business, status=None, supplier=None, limit=10):
+  orders = _order_queryset(business)
+  if status:
+    valid = {choice.value for choice in PurchaseOrder.Status}
+    if status not in valid:
+      raise ToolError(f"status must be one of: {', '.join(sorted(valid))}.")
+    orders = orders.filter(status=status)
+  if supplier:
+    orders = orders.filter(supplier_profile__company_name__icontains=supplier)
+
+  by_status = {
+    row["status"]: row["count"]
+    for row in PurchaseOrder.objects.filter(business=business)
+    .values("status").annotate(count=Count("id"))
+  }
+  rows = [_order_row(po) for po in orders[:_limit(limit, 10)]]
+  return {
+    "total": orders.count(),
+    "all_orders_by_status": by_status,
+    "showing": len(rows),
+    "orders": rows,
+  }
+
+
+def get_purchase_order(business, po_number):
+  po = (
+    _order_queryset(business)
+    .prefetch_related("items")
+    .filter(number__iexact=(po_number or "").strip())
+    .first()
+  )
+  if po is None:
+    raise ToolError(
+      f"No purchase order found with number '{po_number}'. Use list_purchase_orders."
+    )
+
+  shipment = _related(po, "shipment")
+  receipt = _related(po, "goods_receipt")
+  invoice = _related(po, "invoice")
+  shipped = {}
+  if shipment:
+    shipped = {i.purchase_order_item_id: i.quantity for i in shipment.items.all()}
+  received = {}
+  if receipt:
+    received = {i.purchase_order_item_id: i for i in receipt.items.all()}
+
+  items = []
+  for item in po.items.all():
+    got = received.get(item.id)
+    items.append({
+      "product": item.product_name,
+      "sku": item.sku,
+      "ordered": item.quantity,
+      "shipped": shipped.get(item.id) if shipment else None,
+      "received": got.received_quantity if got else None,
+      "rejected": got.rejected_quantity if got else None,
+      "unit_price": item.unit_price,
+      "gst_rate": item.gst_rate,
+      "line_total": item.line_total,
+    })
+
+  return {
+    **_order_row(po),
+    "next_step": NEXT_STEP.get(po.status, ""),
+    "items": items,
+    "payments": [
+      {
+        "status": p.get_status_display(),
+        "amount": p.amount,
+        "paid_at": p.paid_at,
+        "failure_reason": p.failure_reason,
+      }
+      for p in po.payments.all()
+    ],
+    "shipment": {
+      "dispatched_at": shipment.dispatched_at,
+      "expected_delivery_date": shipment.expected_delivery_date,
+      "late_by_days": shipment.late_by_days,
+      "tracking_note": shipment.tracking_note,
+    } if shipment else None,
+    "goods_receipt": {
+      "number": receipt.number,
+      "received_at": receipt.created_at,
+      "issues": [
+        {
+          "product": d.receipt_item.purchase_order_item.product_name,
+          "issue": d.get_kind_display(),
+          "quantity": d.quantity,
+        }
+        for d in receipt.discrepancies.select_related("receipt_item__purchase_order_item")
+      ],
+    } if receipt else None,
+    "invoice": {
+      "number": invoice.number,
+      "status": invoice.get_status_display(),
+      "grand_total": invoice.grand_total,
+      "advance_applied": invoice.advance_applied,
+      "discrepancy_credit": invoice.discrepancy_credit,
+      "balance_due": invoice.balance_due,
+      "refund_due": invoice.refund_due,
+    } if invoice else None,
+  }
+
+
+def list_invoices(business, status=None, supplier=None, limit=10):
+  invoices = (
+    Invoice.objects.filter(business=business)
+    .select_related("supplier_profile", "purchase_order")
+  )
+  if status:
+    valid = {choice.value for choice in Invoice.Status}
+    if status not in valid:
+      raise ToolError(f"status must be one of: {', '.join(sorted(valid))}.")
+    invoices = invoices.filter(status=status)
+  if supplier:
+    invoices = invoices.filter(supplier_profile__company_name__icontains=supplier)
+
+  totals = invoices.aggregate(
+    balance_due_total=_money_sum(F("balance_due")),
+    refund_due_total=_money_sum(F("refund_due")),
+  )
+  rows = [
+    {
+      "number": inv.number,
+      "purchase_order": inv.purchase_order.number,
+      "supplier": inv.supplier_profile.company_name,
+      "status": inv.get_status_display(),
+      "issue_date": inv.issue_date,
+      "grand_total": inv.grand_total,
+      "advance_applied": inv.advance_applied,
+      "discrepancy_credit": inv.discrepancy_credit,
+      "balance_due": inv.balance_due,
+      "refund_due": inv.refund_due,
+    }
+    for inv in invoices[:_limit(limit, 10)]
+  ]
+  return {"total": invoices.count(), **totals, "showing": len(rows), "invoices": rows}
+
+
+def get_receiving_issues(business, days=30, supplier=None, limit=15):
+  days = _days(days)
+  since = timezone.now() - timedelta(days=days)
+  receipts = GoodsReceipt.objects.filter(business=business, created_at__gte=since)
+  issues = GoodsReceiptDiscrepancy.objects.filter(
+    goods_receipt__business=business, goods_receipt__created_at__gte=since
+  )
+  if supplier:
+    supplier_filter = {
+      "purchase_order__supplier_profile__company_name__icontains": supplier
+    }
+    receipts = receipts.filter(**supplier_filter)
+    issues = issues.filter(**{f"goods_receipt__{k}": v for k, v in supplier_filter.items()})
+
+  kinds = dict(GoodsReceiptDiscrepancy.Kind.choices)
+  by_supplier = {}
+  for row in (
+    issues.values("goods_receipt__purchase_order__supplier_profile__company_name", "kind")
+    .annotate(units=Sum("quantity"))
+  ):
+    name = row["goods_receipt__purchase_order__supplier_profile__company_name"]
+    by_supplier.setdefault(name, {})[kinds[row["kind"]]] = row["units"]
+
+  recent = issues.select_related(
+    "goods_receipt__purchase_order__supplier_profile",
+    "receipt_item__purchase_order_item",
+  ).order_by("-goods_receipt__created_at")[:_limit(limit, 15)]
+  return {
+    "period_days": days,
+    "goods_receipts": receipts.count(),
+    "receipts_with_issues": receipts.filter(discrepancies__isnull=False).distinct().count(),
+    "credit_total": receipts.aggregate(
+      total=_money_sum(F("items__credit_amount"))
+    )["total"],
+    "issue_units_by_supplier": by_supplier,
+    "recent_issues": [
+      {
+        "date": d.goods_receipt.created_at,
+        "goods_receipt": d.goods_receipt.number,
+        "purchase_order": d.goods_receipt.purchase_order.number,
+        "supplier": d.goods_receipt.purchase_order.supplier_profile.company_name,
+        "product": d.receipt_item.purchase_order_item.product_name,
+        "issue": d.get_kind_display(),
+        "quantity": d.quantity,
+      }
+      for d in recent
+    ],
+  }
+
+
 TOOL_FUNCTIONS = {
   "get_app_help": get_app_help,
   "get_business_insights": get_business_insights,
@@ -465,6 +744,10 @@ TOOL_FUNCTIONS = {
   "get_rfq_quotations": get_rfq_quotations,
   "list_suppliers": list_suppliers,
   "search_customers": search_customers,
+  "list_purchase_orders": list_purchase_orders,
+  "get_purchase_order": get_purchase_order,
+  "list_invoices": list_invoices,
+  "get_receiving_issues": get_receiving_issues,
 }
 
 _LIMIT = {"type": "INTEGER", "description": f"Max rows to return (1-{MAX_LIMIT})."}
@@ -619,15 +902,84 @@ TOOL_DECLARATIONS = [
       },
     },
   },
+  {
+    "name": "list_purchase_orders",
+    "description": (
+      "Purchase orders (PO-0001, ...) with supplier, status, delivery date and advance "
+      "payment state, plus a count of all orders by status. Use for 'which orders are "
+      "waiting for the advance / not dispatched / on the way'."
+    ),
+    "parameters": {
+      "type": "OBJECT",
+      "properties": {
+        "status": {
+          "type": "STRING",
+          "enum": [
+            "awaiting_advance", "issued", "dispatched",
+            "partially_received", "received", "cancelled",
+          ],
+        },
+        "supplier": {"type": "STRING", "description": "Supplier company name (partial match)."},
+        "limit": _LIMIT,
+      },
+    },
+  },
+  {
+    "name": "get_purchase_order",
+    "description": (
+      "Everything about ONE purchase order: items (ordered, shipped, received, rejected), "
+      "advance payments, shipment and expected delivery, goods receipt issues, invoice, "
+      "and the next step."
+    ),
+    "parameters": {
+      "type": "OBJECT",
+      "properties": {"po_number": {"type": "STRING", "description": "e.g. PO-0003"}},
+      "required": ["po_number"],
+    },
+  },
+  {
+    "name": "list_invoices",
+    "description": (
+      "Supplier invoices with balance due, advance applied, discrepancy credit and refund "
+      "due, plus totals. Use for 'how much do I owe suppliers'."
+    ),
+    "parameters": {
+      "type": "OBJECT",
+      "properties": {
+        "status": {"type": "STRING", "enum": ["unpaid", "paid"]},
+        "supplier": {"type": "STRING", "description": "Supplier company name (partial match)."},
+        "limit": _LIMIT,
+      },
+    },
+  },
+  {
+    "name": "get_receiving_issues",
+    "description": (
+      "Problems found when goods were received: short shipped, short received, rejected or "
+      "damaged, excess. Totals per supplier and the latest issues."
+    ),
+    "parameters": {
+      "type": "OBJECT",
+      "properties": {
+        "days": _DAYS,
+        "supplier": {"type": "STRING", "description": "Supplier company name (partial match)."},
+        "limit": _LIMIT,
+      },
+    },
+  },
 ]
 
 
 
-OWNER_ONLY_TOOLS = {"get_rfq_quotations"}
+OWNER_ONLY_TOOLS = {"get_rfq_quotations", "list_invoices"}
 
 PRICE_FIELDS = {
   "price", "cost_price", "unit_price", "gst_rate",
   "subtotal", "tax_total", "grand_total", "advance_amount", "line_total",
+  "line_subtotal", "line_tax", "amount", "balance_amount",
+  "advance_applied", "discrepancy_credit", "balance_due", "refund_due",
+  "credit_amount", "credit_total", "unpaid_invoice_balance",
+  "balance_due_total", "refund_due_total",
   "stock_value_at_selling_price", "stock_value_at_cost", "products_without_cost_price",
 }
 
@@ -651,7 +1003,7 @@ def execute_tool(name, args, business, is_owner=True):
   if func is None:
     return {"error": f"Unknown tool '{name}'."}
   if not is_owner and name in OWNER_ONLY_TOOLS:
-    return {"error": "Only the business owner can see quotations, prices and costs."}
+    return {"error": "Only the business owner can see quotations, invoices, prices and costs."}
   args = dict(args or {})
   try:
     inspect.signature(func).bind(business, **args)
