@@ -1,7 +1,7 @@
 from django.contrib import admin
 
 # Register your models here.
-from .models import Quotation, QuotationItem, ProcurementSettings
+from .models import Quotation, QuotationItem, ProcurementSettings, Payout
 
 class QuotationItemInline(admin.TabularInline):
   model = QuotationItem
@@ -31,3 +31,12 @@ class ProcurementSettingsAdmin(admin.ModelAdmin):
   list_editable = ["auto_rfq_include_manual", "auto_rfq_include_platform_pool"]
   search_fields = ["business__business_name"]
   autocomplete_fields = []
+@admin.register(Payout)
+class PayoutAdmin(admin.ModelAdmin):
+  list_display = ["purchase_order", "supplier_profile", "amount", "status", "mode", "utr", "created_at"]
+  list_filter = ["status", "mode"]
+  search_fields = ["purchase_order__number", "supplier_profile__company_name", "razorpay_payout_id", "utr"]
+  readonly_fields = [f.name for f in Payout._meta.fields]
+
+  def has_add_permission(self, request):
+    return False

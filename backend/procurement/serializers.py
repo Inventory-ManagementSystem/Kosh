@@ -21,6 +21,7 @@ from .models import (
     GoodsReceiptDiscrepancy,
     GoodsReceiptItem,
     Payment,
+    Payout,
 )
 from .services import calculate_totals
 
@@ -700,6 +701,22 @@ class InvoiceDetailSerializer(InvoiceListSerializer):
       "tracking_note": shipment.tracking_note,
     }
 
+
+class PayoutSerializer(serializers.ModelSerializer):
+  purchase_order_id = serializers.UUIDField(read_only=True)
+  po_number = serializers.CharField(source="purchase_order.number", read_only=True)
+  invoice_id = serializers.UUIDField(read_only=True)
+  invoice_number = serializers.CharField(source="invoice.number", read_only=True)
+  company_name = serializers.CharField(source="supplier_profile.company_name", read_only=True)
+
+  class Meta:
+    model = Payout
+    fields = [
+      "id", "purchase_order_id", "po_number", "invoice_id", "invoice_number",
+      "company_name", "amount", "status", "mode", "utr", "failure_reason",
+      "sent_at", "processed_at", "created_at",
+    ]
+    read_only_fields = fields
 MAX_QUANTITY = 1_000_000
  
  

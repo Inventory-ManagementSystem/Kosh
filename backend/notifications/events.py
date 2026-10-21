@@ -321,6 +321,45 @@ def goods_dispatched(po, shipment, invoice):
   title = f"{po.number} was dispatched" + (" (partial)" if short else "")
   notify(po.business.owner, title, body, kind=Kind.PURCHASE_ORDER)
 
+
+@safe
+def payout_on_hold(payout):
+  notify(
+    payout.supplier_profile.user,
+    f"Add payout details to receive {rupees(payout.amount)}",
+    f"The advance for {payout.purchase_order.number} is ready to be sent to you. "
+    "Add your bank account or UPI ID in payout settings and we'll send it right away.",
+    kind=Kind.PAYMENT,
+  )
+
+
+@safe
+def payout_sent(payout):
+  po = payout.purchase_order
+  utr = f" Bank reference (UTR): {payout.utr}." if payout.utr else ""
+  notify(
+    payout.supplier_profile.user,
+    f"{rupees(payout.amount)} advance sent for {po.number}",
+    f"The advance for {po.number} has been credited to your account.{utr}",
+    kind=Kind.PAYMENT,
+  )
+  notify(
+    po.business.owner,
+    f"Advance released to {payout.supplier_profile.company_name}",
+    f"Your advance of {rupees(payout.amount)} for {po.number} was paid to the supplier.",
+    kind=Kind.PAYMENT,
+    push=False,
+  )
+
+
+@safe
+def payout_failed(payout):
+  notify(
+    payout.supplier_profile.user,
+    f"Couldn't send {rupees(payout.amount)} for {payout.purchase_order.number}",
+    f"{payout.failure_reason} Check your payout details; saving them again retries the payment.",
+    kind=Kind.PAYMENT,
+  )
 @safe
 def goods_received(po, grn, invoice):
   labels = {"short_received": "missing", "rejected": "rejected", "excess": "extra"}

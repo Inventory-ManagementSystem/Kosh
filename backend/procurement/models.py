@@ -490,6 +490,57 @@ class InvoiceItem(models.Model):
   def __str__(self):
     return f"{self.product_name} x {self.quantity}"
 
+
+class Payout(models.Model):
+  class Status(models.TextChoices):
+    ON_HOLD = "on_hold", "On hold"             
+    PENDING = "pending", "Pending"              
+    PROCESSING = "processing", "Processing"     
+    PROCESSED = "processed", "Processed"        
+    FAILED = "failed", "Failed"                 
+
+  ACTIVE = (Status.ON_HOLD, Status.PENDING, Status.PROCESSING, Status.PROCESSED)
+
+  id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+  purchase_order = models.ForeignKey(
+    PurchaseOrder, on_delete=models.PROTECT, related_name="payouts"
+  )
+  invoice = models.ForeignKey(Invoice, on_delete=models.PROTECT, related_name="payouts")
+  supplier_profile = models.ForeignKey(
+    "suppliers.SupplierProfile", on_delete=models.PROTECT, related_name="payouts"
+  )
+  amount = models.DecimalField(**MONEY)
+  status = models.CharField(max_length=12, choices=Status.choices, default=Status.PENDING)
+  mode = models.CharField(max_length=10, blank=True, default="")
+  razorpay_payout_id = models.CharField(max_length=40, unique=True, null=True, blank=True)
+  razorpay_status = models.CharField(max_length=20, blank=True, default="")
+  fund_account_id = models.CharField(max_length=40, blank=True, default="")
+  utr = models.CharField(max_length=64, blank=True, default="")
+  failure_reason = models.CharField(max_length=255, blank=True, default="")
+  idempotency_key = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+  attempts = models.PositiveSmallIntegerField(default=0)
+  sent_at = models.DateTimeField(null=True, blank=True)
+  processed_at = models.DateTimeField(null=True, blank=True)
+  created_at = models.DateTimeField(auto_now_add=True)
+  updated_at = models.DateTimeField(auto_now=True)
+
+  class Meta:
+    ordering = ["-created_at"]
+    indexes = [
+      models.Index(fields=["status", "updated_at"], name="payout_status_updated_idx"),
+      models.Index(fields=["supplier_profile", "status"], name="payout_supplier_status_idx"),
+    ]
+    constraints = [
+      models.UniqueConstraint(
+        fields=["purchase_order"],
+        condition=models.Q(status__in=["on_hold", "pending", "processing", "processed"]),
+        name="uniq_active_payout_per_po",
+      ),
+      models.CheckConstraint(condition=models.Q(amount__gt=0), name="payout_amount_positive"),
+    ]
+
+  def __str__(self):
+    return f"{self.purchase_order.number} payout - {self.status}"
 class GoodsReceipt(models.Model):
   id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
   business = models.ForeignKey(
