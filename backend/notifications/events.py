@@ -264,6 +264,36 @@ def rfq_awarded(rfq):
   )
 
 @safe
+def advance_paid(po):
+  notify(
+    po.business.owner,
+    f"Advance paid for {po.number}",
+    f"We received your advance of {rupees(po.advance_amount)}. "
+    f"{po.supplier_profile.company_name} has been sent the purchase order.",
+    kind=Kind.PAYMENT,
+  )
+
+
+@safe
+def advance_expired(po):
+  notify(
+    po.business.owner,
+    f"{po.number} cancelled: advance not paid",
+    f"The advance of {rupees(po.advance_amount)} wasn't paid by {when(po.advance_due_by)}, "
+    f"so the order was cancelled. You can accept a quotation for {po.rfq.number} again.",
+    kind=Kind.PAYMENT,
+  )
+
+
+@safe
+def advance_refunded(po, amount):
+  notify(
+    po.business.owner,
+    f"Refund started for {po.number}",
+    f"Your payment of {rupees(amount)} came in after the order was closed, "
+    f"so it's being refunded to the original payment method.",
+    kind=Kind.PAYMENT,
+  )
 def goods_dispatched(po, shipment, invoice):
   sent = {s.purchase_order_item_id: s.quantity for s in shipment.items.all()}
   short = []

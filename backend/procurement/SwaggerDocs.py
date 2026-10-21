@@ -14,7 +14,7 @@ from accounts.swagger import (
   UNAUTHORIZED_RESPONSE,
 )
 
-from .serializers import QuotationSubmitSerializer, RFQUpdateSerializer, RFQCreateSerializer, RFQUpdateSerializer, BulkRFQCreateSerializer, DispatchSerializer
+from .serializers import QuotationSubmitSerializer, RFQUpdateSerializer, RFQCreateSerializer, RFQUpdateSerializer, BulkRFQCreateSerializer, DispatchSerializer, AdvanceVerifySerializer
 
 
 RFQ_ITEMS_EXAMPLE = [
@@ -1815,6 +1815,224 @@ supplier_invoice_detail_docs = extend_schema_view(
       401: UNAUTHORIZED_RESPONSE,
       403: NOT_SUPPLIER_RESPONSE,
       404: INVOICE_NOT_FOUND_RESPONSE,
+    },
+  ),
+)
+
+
+GATEWAY_ERROR_RESPONSE = resp(
+  "Razorpay could not be reached or returned an error. Safe to retry.",
+  err_example(
+    "Gateway Error",
+    "Couldn't reach the payment gateway. Try again in a minute.",
+    "GATEWAY_ERROR",
+  ),
+)
+
+PAYMENTS_OFF_RESPONSE = resp(
+  "Razorpay keys are not configured on the server.",
+  err_example(
+    "Not Configured",
+    "Online payments aren't set up yet.",
+    "PAYMENTS_NOT_CONFIGURED",
+  ),
+)
+
+PAYMENT_EXAMPLE = {
+  "id": "8a1c4e72-5d3b-4f96-a0e8-7b2d9c6f1e35",
+  "amount": "1000.00",
+  "status": "created",
+  "razorpay_order_id": "order_PZ3k8sQm1vXy2a",
+  "razorpay_payment_id": None,
+  "failure_reason": "",
+  "refund_id": "",
+  "paid_at": None,
+  "created_at": "2026-10-13T10:02:00Z",
+}
+
+PAYMENT_PAID_EXAMPLE = {
+  **PAYMENT_EXAMPLE,
+  "status": "paid",
+  "razorpay_payment_id": "pay_PZ3lQw7tN4bR9c",
+  "paid_at": "2026-10-13T10:05:00Z",
+}
+
+PURCHASE_ORDER_ISSUED_EXAMPLE = {
+  **PURCHASE_ORDER_EXAMPLE,
+  "status": "issued",
+  "issued_at": "2026-10-13T10:05:00Z",
+}
+
+CHECKOUT_EXAMPLE = {
+  "key": "rzp_test_1DP5mmOlF5G5ag",
+  "order_id": "order_PZ3k8sQm1vXy2a",
+  "amount": 100000,
+  "currency": "INR",
+  "name": "Kosh",
+  "description": "Advance for PO-0001 - Sharma Traders",
+  "prefill": {"name": "Ravi Kumar", "email": "ravi@example.com"},
+  "notes": {"purchase_order_id": "2f6b9d04-7c1e-4a83-b5f2-9e0d3a8c6b17"},
+  "purchase_order_id": "2f6b9d04-7c1e-4a83-b5f2-9e0d3a8c6b17",
+  "advance_due_by": "2026-10-14T10:00:00Z",
+}
+
+ADVANCE_STATE_CONFLICT = (
+  err_example(
+    "Already Paid",
+    "The advance for this order is already paid.",
+    "ADVANCE_ALREADY_PAID",
+  ),
+  err_example("Order Cancelled", "This order was cancelled.", "ORDER_CANCELLED"),
+  err_example(
+    "Advance Expired",
+    "The time to pay this advance has run out.",
+    "ADVANCE_EXPIRED",
+  ),
+  err_example("No Advance", "This order has no advance to pay.", "NO_ADVANCE_DUE"),
+)
+
+po_advance_docs = extend_schema_view(
+  get=extend_schema(
+    operation_id="procurement_purchase_orders_advance_status",
+    summary="Advance Payment Status",
+    description=(
+      "Returns the purchase order and every payment attempt made for its advance, "
+      "newest first. Use it to refresh the screen after Checkout closes, or to show "
+      "the payment history. Payment `status` is `created` (Razorpay order open, not "
+      "paid yet), `paid`, `failed` (advance expired before payment) or `refunded` "
+      "(money arrived after the order was closed and was sent back; see `refund_id`). "
+      "`failure_reason` holds Razorpay's message for the last failed attempt. "
+      + OWNER_NOTE
+    ),
+    responses={
+      200: resp(
+        "Advance status.",
+        ok_example(
+          "Awaiting Payment",
+          "Advance status.",
+          data={"order": PURCHASE_ORDER_EXAMPLE, "payments": [PAYMENT_EXAMPLE]},
+        ),
+        ok_example(
+          "Paid",
+          "Advance status.",
+          data={
+            "order": PURCHASE_ORDER_ISSUED_EXAMPLE,
+            "payments": [PAYMENT_PAID_EXAMPLE],
+          },
+        ),
+      ),
+      401: UNAUTHORIZED_RESPONSE,
+      403: OWNER_ONLY_RESPONSE,
+      404: PO_NOT_FOUND_RESPONSE,
+    },
+  ),
+  post=extend_schema(
+    operation_id="procurement_purchase_orders_advance_start",
+    summary="Start Advance Payment",
+    description=(
+      "Creates a Razorpay order for the PO's advance and returns everything the "
+      "frontend passes to Razorpay Checkout (`key`, `order_id`, `amount`, `currency`, "
+      "`name`, `description`, `prefill`, `notes`). `amount` is in **paise** "
+      "(₹1000.00 = 100000). Calling it again while the advance is unpaid returns the "
+      "same `order_id`, so a double click or a retry never creates a second order.\n\n"
+      "The PO must be `awaiting_advance` and `advance_due_by` must not have passed. "
+      "After the owner pays, call **Verify Advance Payment** with the three "
+      "`razorpay_*` values from Checkout's success handler. If that call is lost, "
+      "Razorpay's webhook confirms the payment anyway. No request body is needed. "
+      + OWNER_NOTE
+    ),
+    request=None,
+    responses={
+      200: resp("Checkout ready.", ok_example("Checkout Ready", "Checkout ready.", data=CHECKOUT_EXAMPLE)),
+      401: UNAUTHORIZED_RESPONSE,
+      403: OWNER_ONLY_RESPONSE,
+      404: PO_NOT_FOUND_RESPONSE,
+      409: resp("The advance can't be paid now.", *ADVANCE_STATE_CONFLICT),
+      429: THROTTLED_RESPONSE,
+      502: GATEWAY_ERROR_RESPONSE,
+      503: PAYMENTS_OFF_RESPONSE,
+    },
+  ),
+)
+
+po_advance_verify_docs = extend_schema_view(
+  post=extend_schema(
+    operation_id="procurement_purchase_orders_advance_verify",
+    summary="Verify Advance Payment",
+    description=(
+      "Call this from Razorpay Checkout's success `handler` with the three values it "
+      "returns. The server checks the signature, fetches the payment from Razorpay, "
+      "captures it if it is only authorized, and checks the amount. The payment then "
+      "becomes `paid` and the PO becomes `issued`; the other quotations are rejected "
+      "and the supplier is notified.\n\n"
+      "Safe to call more than once: if the webhook already confirmed the payment, "
+      "the same result is returned. If the money arrived after the order was "
+      "cancelled, the response is still 200 but the PO stays `cancelled` and the "
+      "payment is refunded automatically. " + OWNER_NOTE
+    ),
+    request=AdvanceVerifySerializer,
+    examples=[
+      OpenApiExample(
+        "Checkout Response",
+        value={
+          "razorpay_order_id": "order_PZ3k8sQm1vXy2a",
+          "razorpay_payment_id": "pay_PZ3lQw7tN4bR9c",
+          "razorpay_signature": "9ef4dffbfd84f1318f6739a3ce19f9d85851857ae648f114332d8401e0949a3d",
+        },
+        request_only=True,
+      ),
+    ],
+    responses={
+      200: resp(
+        "Payment confirmed.",
+        ok_example(
+          "Order Issued",
+          "Advance paid. The order has been sent to the supplier.",
+          data=PURCHASE_ORDER_ISSUED_EXAMPLE,
+        ),
+        ok_example(
+          "Late Payment Refunded",
+          "Payment received, but this order was already closed. It will be refunded.",
+          data={**PURCHASE_ORDER_EXAMPLE, "status": "cancelled"},
+        ),
+      ),
+      400: resp(
+        "The payment could not be verified.",
+        err_example(
+          "Validation Error",
+          "Validation failed.",
+          "VALIDATION_ERROR",
+          errors={"razorpay_signature": ["This field is required."]},
+        ),
+        err_example("Bad Signature", "We couldn't verify this payment.", "INVALID_SIGNATURE"),
+        err_example(
+          "Wrong Order",
+          "This payment belongs to a different order.",
+          "ORDER_MISMATCH",
+        ),
+        err_example(
+          "Amount Mismatch",
+          "The paid amount doesn't match the advance.",
+          "AMOUNT_MISMATCH",
+        ),
+      ),
+      401: UNAUTHORIZED_RESPONSE,
+      403: OWNER_ONLY_RESPONSE,
+      404: resp(
+        "No payment with this `razorpay_order_id` on this PO in this business.",
+        err_example("Not Found", "Payment not found.", "PAYMENT_NOT_FOUND"),
+      ),
+      409: resp(
+        "Razorpay hasn't completed the payment yet.",
+        err_example(
+          "Not Captured",
+          "This payment isn't complete yet.",
+          "PAYMENT_NOT_CAPTURED",
+        ),
+      ),
+      429: THROTTLED_RESPONSE,
+      502: GATEWAY_ERROR_RESPONSE,
+      503: PAYMENTS_OFF_RESPONSE,
     },
   ),
 )

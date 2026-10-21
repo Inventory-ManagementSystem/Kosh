@@ -10,7 +10,7 @@ from .tools import declarations_for, execute_tool
 logger = logging.getLogger(__name__)
 
 MAX_TOOL_ROUNDS = 5
-GEMINI_CALL_TIMEOUT_MS = 20_000
+GEMINI_CALL_TIMEOUT_MS = 30_000
 TOOL_TIME_BUDGET_SECONDS = 25
 
 
@@ -167,6 +167,7 @@ class GeminiAgent:
         )
       ),
       automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+      thinking_config=types.ThinkingConfig(thinking_level="low"),
     )
 
   def _generate(self, contents, config):

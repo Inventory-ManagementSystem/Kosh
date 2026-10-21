@@ -20,10 +20,9 @@ from .models import (
     GoodsReceipt,
     GoodsReceiptDiscrepancy,
     GoodsReceiptItem,
-
+    Payment,
 )
 from .services import calculate_totals
-
 
 
 
@@ -448,6 +447,17 @@ class PurchaseOrderSummarySerializer(serializers.ModelSerializer):
   def get_balance_amount(self, obj):
     return str(obj.balance_amount)
 
+
+class PaymentSerializer(serializers.ModelSerializer):
+  class Meta:
+    model = Payment
+    fields = [
+      "id", "amount", "status", "razorpay_order_id", "razorpay_payment_id",
+      "failure_reason", "refund_id", "paid_at", "created_at",
+    ]
+    read_only_fields = fields
+
+
 class PurchaseOrderItemSerializer(serializers.ModelSerializer):
   product_id = serializers.UUIDField(read_only=True)
   image = serializers.ImageField(source="product.image", read_only=True)
@@ -465,6 +475,10 @@ class PurchaseOrderItemSerializer(serializers.ModelSerializer):
     read_only_fields = fields
 
 
+class AdvanceVerifySerializer(serializers.Serializer):
+  razorpay_order_id = serializers.CharField(max_length=64)
+  razorpay_payment_id = serializers.CharField(max_length=64)
+  razorpay_signature = serializers.CharField(max_length=128)
 def po_late_by_days(po):
   shipment = getattr(po, "shipment", None)
   if shipment is not None:
