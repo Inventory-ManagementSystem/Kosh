@@ -8,6 +8,7 @@ from suppliers.models import SupplierProfile
 
 from .models import Invoice, InvoiceItem, PurchaseOrder, Shipment, ShipmentItem
 from .po_services import PurchaseOrderError
+from .payout_services import create_advance_payout 
 
 CENT = Decimal("0.01")
 
@@ -115,6 +116,7 @@ def mark_dispatched(
     grand_total=grand_total,
     advance_applied=advance_applied,
     balance_due=grand_total - advance_applied,
+    refund_due=po.advance_amount - advance_applied,
   )
   InvoiceItem.objects.bulk_create([
     InvoiceItem(
@@ -134,6 +136,7 @@ def mark_dispatched(
 
   po.status = PurchaseOrder.Status.DISPATCHED
   po.save(update_fields=["status", "updated_at"])
+  create_advance_payout(po, invoice)
 
   transaction.on_commit(lambda: events.goods_dispatched(po, shipment, invoice))
   return shipment, invoice

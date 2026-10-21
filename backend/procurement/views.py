@@ -22,7 +22,7 @@ from .ranking import WeightError, parse_weights, rank_quotations
 from .dispatch_services import mark_dispatched
 from notifications.models import Notification
 from notifications.services import notify_many
-
+from django.db.models import Exists, OuterRef
 
 from .SwaggerDocs import (
   reorder_alert_list_docs,
@@ -53,10 +53,23 @@ from .SwaggerDocs import (
   invoice_detail_docs,
   supplier_invoice_list_docs,
   supplier_invoice_detail_docs,
+  payout_list_docs,
+  supplier_payout_list_docs,
 
 )
 
-from .models import RFQ, Quotation, RFQRecipient, ReorderSuggestion, PurchaseOrder, Shipment, Invoice
+from .models import RFQ, Quotation, RFQRecipient, ReorderSuggestion, PurchaseOrder, Shipment, Invoice, Payout
+from .grn_docs import(
+  grn_create_docs,
+  grn_detail_docs,
+  grn_list_docs,
+  supplier_grn_detail_docs,
+  supplier_grn_list_docs,
+
+)
+
+
+from .models import RFQ, Quotation, RFQRecipient, ReorderSuggestion, PurchaseOrder, Shipment, Invoice, GoodsReceipt, GoodsReceiptDiscrepancy
 from .serializers import (
   OwnerQuotationSerializer,
   QuotationSerializer,
@@ -79,8 +92,13 @@ from .serializers import (
   InvoiceSummarySerializer,
   InvoiceListSerializer,
   InvoiceDetailSerializer,
+  PayoutSerializer,
 
+  GoodsReceiptCreateSerializer,
+  GoodsReceiptDetailSerializer,
+  GoodsReceiptListSerializer,
 )
+from .payout_services import PayoutWebhookError, PayoutError, handle_payout_webhook
 from .services import (
   QuotationError,
   decline_rfq,
@@ -95,6 +113,8 @@ from .rfq_services import (
   create_rfq_for_suggestion,
   create_rfqs_for_suggestions,
 )
+
+from .grn_services import receive_goods
 
 from .serializers import RFQCreateSerializer
 
@@ -512,6 +532,7 @@ PO_ERROR_STATUS = {
   "ORDER_NOT_CANCELLABLE": 409,
   "PAYMENT_RECEIVED": 409,
   "ALREADY_DISPATCHED": 409,
+
 }
  
  
@@ -810,3 +831,167 @@ class SupplierInvoiceDetailApi(APIView):
       invoice_queryset(Invoice.objects.filter(supplier_profile=request.supplier)), pk=pk
     )
     return success_response("Invoice fetched.", InvoiceDetailSerializer(invoice).data)
+
+def payout_queryset(base):
+  return base.select_related("purchase_order", "invoice", "supplier_profile")
+
+
+def filter_payout_status(request, qs):
+  status_param = request.query_params.get("status")
+  if status_param in Payout.Status.values:
+    qs = qs.filter(status=status_param)
+  return qs
+
+
+@payout_list_docs
+class PayoutListApi(APIView):
+  permission_classes = [HasBusinessAccess, IsOwner]
+
+  def get(self, request):
+    qs = payout_queryset(Payout.objects.filter(purchase_order__business=request.business))
+    qs = filter_payout_status(request, qs)
+    return paginated_response(request, qs, PayoutSerializer, "Payouts fetched.")
+
+
+@supplier_payout_list_docs
+class SupplierPayoutListApi(APIView):
+  permission_classes = [IsAuthenticated, IsSupplier]
+
+  def get(self, request):
+    qs = payout_queryset(Payout.objects.filter(supplier_profile=request.supplier))
+    qs = filter_payout_status(request, qs)
+    return paginated_response(request, qs, PayoutSerializer, "Payouts fetched.")
+
+
+@extend_schema(exclude=True)
+class RazorpayXWebhookApi(APIView):
+  authentication_classes = []
+  permission_classes = [AllowAny]
+  throttle_classes = []
+
+  def post(self, request):
+    raw = request.body
+    signature = request.headers.get("X-Razorpay-Signature", "")
+    try:
+      result = handle_payout_webhook(raw, signature)
+    except PayoutWebhookError:
+      return Response({"detail": "invalid signature"}, status=status.HTTP_400_BAD_REQUEST)
+    except PayoutError as err:
+      logger.error("RazorpayX webhook not applied: %s (%s)", err.message, err.code)
+      return Response({"detail": "retry"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+    except Exception:
+      logger.exception("RazorpayX webhook crashed")
+      return Response({"detail": "error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    return Response({"status": result})
+
+GRN_ERROR_STATUS = {
+  "ORDER_NOT_FOUND": 404,
+  "ORDER_NOT_DISPATCHED": 409,
+  "ALREADY_RECEIVED": 409,
+}
+
+def grn_error_response(err):
+  return error_response(
+    err.message, err.code,
+    status=GRN_ERROR_STATUS.get(err.code, status.HTTP_400_BAD_REQUEST),
+  )
+ 
+ 
+def grn_queryset(base):
+  return base.select_related(
+    "business",
+    "received_by__profile",
+    "purchase_order__invoice",
+    "purchase_order__supplier_profile",
+  ).prefetch_related(
+    "discrepancies",
+    "items__purchase_order_item",
+    "items__discrepancies",
+  )
+ 
+ 
+def filter_receipts(request, qs):
+  if request.query_params.get("has_discrepancies") == "true":
+    qs = qs.filter(
+      Exists(GoodsReceiptDiscrepancy.objects.filter(goods_receipt=OuterRef("pk")))
+    )
+  return qs
+ 
+ 
+@grn_create_docs
+class GoodsReceiptCreateApi(APIView):
+  permission_classes = [HasBusinessAccess]
+  throttle_classes = [OrderWriteThrottle]
+ 
+  def post(self, request, pk):
+    serializer = GoodsReceiptCreateSerializer(data=request.data)
+    if not serializer.is_valid():
+      return validation_error_response(serializer)
+    data = serializer.validated_data
+ 
+    try:
+      grn, _invoice = receive_goods(
+        request.business, pk, request.user, data["items"], notes=data["notes"]
+      )
+    except PurchaseOrderError as err:
+      return grn_error_response(err)
+ 
+    grn = grn_queryset(GoodsReceipt.objects.filter(pk=grn.pk)).get()
+    return success_response(
+      "Goods received. Stock updated and the invoice settled.",
+      GoodsReceiptDetailSerializer(grn, context={"show_staff": True}).data,
+      status=status.HTTP_201_CREATED,
+    )
+ 
+ 
+@grn_list_docs
+class GoodsReceiptListApi(APIView):
+  permission_classes = [HasBusinessAccess]
+ 
+  def get(self, request):
+    qs = grn_queryset(GoodsReceipt.objects.filter(business=request.business))
+    return paginated_response(
+      request, filter_receipts(request, qs), GoodsReceiptListSerializer,
+      "Goods receipts fetched.",
+    )
+ 
+ 
+@grn_detail_docs
+class GoodsReceiptDetailApi(APIView):
+  permission_classes = [HasBusinessAccess]
+ 
+  def get(self, request, pk):
+    grn = get_object_or_404(
+      grn_queryset(GoodsReceipt.objects.filter(business=request.business)), pk=pk
+    )
+    return success_response(
+      "Goods receipt fetched.",
+      GoodsReceiptDetailSerializer(grn, context={"show_staff": True}).data,
+    )
+ 
+ 
+def supplier_grn_base(supplier):
+  return GoodsReceipt.objects.filter(purchase_order__supplier_profile=supplier)
+ 
+ 
+@supplier_grn_list_docs
+class SupplierGoodsReceiptListApi(APIView):
+  permission_classes = [IsAuthenticated, IsSupplier]
+ 
+  def get(self, request):
+    qs = grn_queryset(supplier_grn_base(request.supplier))
+    return paginated_response(
+      request, filter_receipts(request, qs), GoodsReceiptListSerializer,
+      "Goods receipts fetched.",
+    )
+ 
+ 
+@supplier_grn_detail_docs
+class SupplierGoodsReceiptDetailApi(APIView):
+  permission_classes = [IsAuthenticated, IsSupplier]
+
+  def get(self, request, pk):
+    grn = get_object_or_404(grn_queryset(supplier_grn_base(request.supplier)), pk=pk)
+    return success_response(
+      "Goods receipt fetched.", GoodsReceiptDetailSerializer(grn).data
+    )

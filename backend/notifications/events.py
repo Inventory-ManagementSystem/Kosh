@@ -308,6 +308,11 @@ def goods_dispatched(po, shipment, invoice):
     f"{rupees(invoice.balance_due)} is due after delivery. "
     f"Expected by {shipment.expected_delivery_date:%d %b %Y}."
   )
+  if invoice.refund_due > 0:
+    body += (
+      f" The advance was {rupees(invoice.refund_due)} more than this invoice, "
+      "so that amount is owed back."
+    )
   if shipment.is_late:
     body += f" That is {shipment.late_by_days} day(s) later than the order date."
   if short:
@@ -315,3 +320,67 @@ def goods_dispatched(po, shipment, invoice):
 
   title = f"{po.number} was dispatched" + (" (partial)" if short else "")
   notify(po.business.owner, title, body, kind=Kind.PURCHASE_ORDER)
+
+
+@safe
+def payout_on_hold(payout):
+  notify(
+    payout.supplier_profile.user,
+    f"Add payout details to receive {rupees(payout.amount)}",
+    f"The advance for {payout.purchase_order.number} is ready to be sent to you. "
+    "Add your bank account or UPI ID in payout settings and we'll send it right away.",
+    kind=Kind.PAYMENT,
+  )
+
+
+@safe
+def payout_sent(payout):
+  po = payout.purchase_order
+  utr = f" Bank reference (UTR): {payout.utr}." if payout.utr else ""
+  notify(
+    payout.supplier_profile.user,
+    f"{rupees(payout.amount)} advance sent for {po.number}",
+    f"The advance for {po.number} has been credited to your account.{utr}",
+    kind=Kind.PAYMENT,
+  )
+  notify(
+    po.business.owner,
+    f"Advance released to {payout.supplier_profile.company_name}",
+    f"Your advance of {rupees(payout.amount)} for {po.number} was paid to the supplier.",
+    kind=Kind.PAYMENT,
+    push=False,
+  )
+
+
+@safe
+def payout_failed(payout):
+  notify(
+    payout.supplier_profile.user,
+    f"Couldn't send {rupees(payout.amount)} for {payout.purchase_order.number}",
+    f"{payout.failure_reason} Check your payout details; saving them again retries the payment.",
+    kind=Kind.PAYMENT,
+  )
+@safe
+def goods_received(po, grn, invoice):
+  labels = {"short_received": "missing", "rejected": "rejected", "excess": "extra"}
+  issues = [
+    f"{d.receipt_item.purchase_order_item.product_name} ({d.quantity} {labels[d.kind]})"
+    for d in grn.discrepancies.select_related("receipt_item__purchase_order_item")
+    if d.kind in labels
+  ]
+
+  body = f"{po.business.business_name} confirmed delivery of {po.number} ({grn.number})."
+  if invoice.discrepancy_credit > 0:
+    body += (
+      f" {rupees(invoice.discrepancy_credit)} was credited on {invoice.number}; "
+      f"balance due is now {rupees(invoice.balance_due)}."
+    )
+  else:
+    body += f" Balance due on {invoice.number}: {rupees(invoice.balance_due)}."
+  if invoice.refund_due > 0:
+    body += f" {rupees(invoice.refund_due)} of the advance is owed back."
+  if issues:
+    body += " Issues: " + list_names(issues) + "."
+
+  title = f"{po.number} was received" + (" (with issues)" if issues else "")
+  notify(po.supplier_profile.user, title, body, kind=Kind.PURCHASE_ORDER)

@@ -13,8 +13,8 @@ from accounts.swagger import UNAUTHORIZED_RESPONSE, THROTTLED_EXAMPLE, err_examp
 from .models import SupplierProfile, SupplyCategory, Supplier
 from accounts.permissions import HasBusinessAccess, IsOwnerOrReadOnly
 from .permissions import IsSupplier
-from .serializers import SupplierProfileSerializer, SupplyCategorySerializer, OwnerSupplierSerializer
-from .throttles import SupplierRegistrationThrottle, OwnerSupplierThrottle
+from .serializers import SupplierProfileSerializer, SupplyCategorySerializer, OwnerSupplierSerializer, PayoutAccountInputSerializer, PayoutAccountSerializer
+from .throttles import SupplierRegistrationThrottle, OwnerSupplierThrottle, PayoutAccountThrottle
 
 from .SwaggerDocs import owner_supplier_list_create_docs, owner_supplier_detail_docs
 from notifications import events
@@ -344,3 +344,98 @@ class OwnerSupplierDetailApi(APIView):
         status=status.HTTP_409_CONFLICT,
       )
     return success_response("Supplier deleted.")
+
+PAYOUT_ACCOUNT_EXAMPLE = {
+  "method": "bank_account",
+  "account_holder_name": "Sharma Traders",
+  "bank_name": "HDFC Bank",
+  "ifsc": "HDFC0001234",
+  "account_last4": "6789",
+  "vpa": "",
+  "updated_at": "2026-10-20T10:00:00Z",
+}
+
+PAYOUT_ERROR_STATUS = {
+  "GATEWAY_REJECTED": status.HTTP_400_BAD_REQUEST,
+  "GATEWAY_ERROR": status.HTTP_502_BAD_GATEWAY,
+  "PAYOUTS_NOT_CONFIGURED": status.HTTP_503_SERVICE_UNAVAILABLE,
+}
+
+
+class SupplierPayoutAccountApi(APIView):
+  permission_classes = [IsAuthenticated, IsSupplier]
+  throttle_classes = [PayoutAccountThrottle]
+
+  @extend_schema(
+    operation_id="suppliers_payout_account_retrieve",
+    summary="Get My Payout Details",
+    description=(
+      "Where Kosh sends this supplier's money (advance payouts). Only the last 4 "
+      "digits of the bank account are returned. `data` is null if nothing is saved yet."
+    ),
+    responses={
+      200: resp("Payout details.",
+                ok_example("Bank Account", "Payout details fetched.", data=PAYOUT_ACCOUNT_EXAMPLE),
+                ok_example("Not Added", "No payout details added yet.", data=None)),
+      401: UNAUTHORIZED_RESPONSE,
+      403: NOT_SUPPLIER_RESPONSE,
+    },
+  )
+  def get(self, request):
+    account = getattr(request.supplier, "payout_account", None)
+    if account is None:
+      return success_response("No payout details added yet.", None)
+    return success_response("Payout details fetched.", PayoutAccountSerializer(account).data)
+
+  @extend_schema(
+    operation_id="suppliers_payout_account_update",
+    summary="Save My Payout Details",
+    description=(
+      "Adds or replaces the bank account or UPI ID that advance payouts go to. "
+      "The details are registered with RazorpayX; Kosh stores only the last 4 digits. "
+      "For `bank_account` send `account_holder_name`, `ifsc`, `account_number` and "
+      "`account_number_confirm`; for `vpa` send `vpa`. Saving also sends any payout "
+      "that was waiting for these details and retries failed ones; "
+      "`released_payouts` is how many were started."
+    ),
+    request=PayoutAccountInputSerializer,
+    examples=[
+      OpenApiExample("Bank Account", request_only=True, value={
+        "method": "bank_account", "account_holder_name": "Sharma Traders",
+        "ifsc": "HDFC0001234", "account_number": "50100123456789",
+        "account_number_confirm": "50100123456789",
+      }),
+      OpenApiExample("UPI", request_only=True, value={"method": "vpa", "vpa": "sharmatraders@okhdfcbank"}),
+    ],
+    responses={
+      200: resp("Saved.", ok_example("Saved", "Payout details saved.",
+                data={"account": PAYOUT_ACCOUNT_EXAMPLE, "released_payouts": 1})),
+      400: resp("Invalid details.",
+                err_example("Validation Error", "Validation failed.", "VALIDATION_ERROR",
+                            errors={"ifsc": ["Enter a valid 11-character IFSC, e.g. HDFC0001234."]}),
+                err_example("Rejected", "Invalid IFSC code", "GATEWAY_REJECTED")),
+      401: UNAUTHORIZED_RESPONSE,
+      403: NOT_SUPPLIER_RESPONSE,
+      502: resp("RazorpayX unreachable.",
+                err_example("Gateway Error", "Couldn't reach RazorpayX. Try again in a minute.", "GATEWAY_ERROR")),
+      503: resp("Payouts not configured on the server.",
+                err_example("Not Configured", "Supplier payouts aren't set up yet.", "PAYOUTS_NOT_CONFIGURED")),
+    },
+  )
+  def put(self, request):
+    from procurement.payout_services import PayoutError, save_payout_account
+
+    serializer = PayoutAccountInputSerializer(data=request.data)
+    if not serializer.is_valid():
+      return validation_error_response(serializer)
+    try:
+      account, released = save_payout_account(request.supplier, serializer.validated_data)
+    except PayoutError as err:
+      return error_response(
+        err.message, err.code,
+        status=PAYOUT_ERROR_STATUS.get(err.code, status.HTTP_400_BAD_REQUEST),
+      )
+    return success_response("Payout details saved.", {
+      "account": PayoutAccountSerializer(account).data,
+      "released_payouts": released,
+    })
