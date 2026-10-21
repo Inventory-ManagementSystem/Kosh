@@ -1,7 +1,7 @@
 from django.contrib import admin
 
 # Register your models here.
-from .models import Quotation, QuotationItem
+from .models import Quotation, QuotationItem, ProcurementSettings
 
 class QuotationItemInline(admin.TabularInline):
   model = QuotationItem
@@ -22,3 +22,12 @@ class QuotationAdmin(admin.ModelAdmin):
     "revision", "submitted_at", "created_at", "updated_at",
   ]
   inlines = [QuotationItemInline]
+
+@admin.register(ProcurementSettings)
+class ProcurementSettingsAdmin(admin.ModelAdmin):
+  list_display = [
+    "business", "auto_rfq_include_manual", "auto_rfq_include_platform_pool", "updated_at",
+  ]
+  list_editable = ["auto_rfq_include_manual", "auto_rfq_include_platform_pool"]
+  search_fields = ["business__business_name"]
+  autocomplete_fields = []

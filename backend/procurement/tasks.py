@@ -11,6 +11,7 @@ from .alert_services import create_alerts_for_business
 from .models import RFQ, PurchaseOrder, ReorderSuggestion
 from .payment_services import PaymentError, expire_advance, refund_payment
 from .rfq_services import RFQCreationError, create_rfqs_for_suggestions
+from .preferences import get_procurement_settings
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +31,6 @@ def create_auto_rfqs():
   alerts = (
     ReorderSuggestion.objects.filter(
       status=ReorderSuggestion.Status.OPEN,
-      method="formula",
       suggested_quantity__gte=1,
       product__supply_category__isnull=False,
     )
@@ -38,18 +38,34 @@ def create_auto_rfqs():
     .order_by("created_at")
   )
 
+  prefs_by_business = {}
   groups = {}
-  for alert in alerts.iterator():
+  for alert in alerts:
+    prefs = prefs_by_business.get(alert.business_id)
+    if prefs is None:
+      prefs = get_procurement_settings(alert.business)
+      prefs_by_business[alert.business_id] = prefs
+    if alert.method != "formula" and not prefs.auto_rfq_include_manual:
+      continue
     key = (alert.business_id, alert.product.supply_category_id)
-    group = groups.setdefault(key, {"business": alert.business, "alerts": []})
+    group = groups.setdefault(
+      key, {"business": alert.business, "prefs": prefs, "alerts": []}
+    )
     group["alerts"].append((alert.pk, None))
 
-  created = 0
+  created = 0 
   for group in groups.values():
     try:
-      created += len(create_rfqs_for_suggestions(group["business"], group["alerts"]))
-    except RFQCreationError:
-      continue
+      created += len(create_rfqs_for_suggestions(
+        group["business"],
+        group["alerts"],
+        include_platform_pool=group["prefs"].auto_rfq_include_platform_pool,
+      ))
+    except RFQCreationError as err:
+      logger.warning(
+        "Auto RFQ skipped for business %s: %s (%s)",
+        group["business"].pk, err.message, err.code,
+      )
   return created
 
 
