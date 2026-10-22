@@ -14,7 +14,7 @@ from accounts.swagger import (
   UNAUTHORIZED_RESPONSE,
 )
 
-from .serializers import QuotationSubmitSerializer, RFQUpdateSerializer, RFQCreateSerializer, RFQUpdateSerializer, BulkRFQCreateSerializer, DispatchSerializer, AdvanceVerifySerializer
+from .serializers import QuotationSubmitSerializer, RFQUpdateSerializer, RFQCreateSerializer, RFQUpdateSerializer, BulkRFQCreateSerializer, DispatchSerializer, AdvanceVerifySerializer, ProcurementSettingsSerializer
 
 
 RFQ_ITEMS_EXAMPLE = [
@@ -2109,6 +2109,84 @@ supplier_payout_list_docs = extend_schema_view(
       401: UNAUTHORIZED_RESPONSE,
       403: NOT_SUPPLIER_RESPONSE,
       404: INVOICE_PAGE_NOT_FOUND_RESPONSE,
+    },
+  ),
+)
+
+SETTINGS_EXAMPLE = {
+  "auto_rfq_include_manual": True,
+  "auto_rfq_include_platform_pool": False,
+  "updated_at": "2026-10-22T08:30:00Z",
+}
+
+SETTINGS_NOTE = (
+  "These settings control the automatic RFQs that the nightly check creates "
+  "(about 02:10 IST) from low-stock alerts. `auto_rfq_include_manual`: alerts whose "
+  "`method` is `formula` (enough dispatch history) always get an automatic RFQ; "
+  "when this is true, alerts with `method` `manual` get one too, otherwise they "
+  "stay open for the owner. Default true. `auto_rfq_include_platform_pool`: when "
+  "true, automatic RFQs also go to verified platform suppliers in the business's "
+  "city, not only the owner's own suppliers. Default false. A change applies from "
+  "the next nightly run; it does not change RFQs that already exist, and it does "
+  "not affect RFQs the owner creates by hand, which have their own "
+  "`include_platform_pool` option. Alerts whose product has no supply category are "
+  "never turned into automatic RFQs."
+)
+
+procurement_settings_docs = extend_schema_view(
+  get=extend_schema(
+    operation_id="procurement_settings_retrieve",
+    summary="Get Procurement Settings",
+    description=(
+      "Returns the business's procurement settings. A business that has never "
+      "saved any gets the defaults. " + SETTINGS_NOTE + " " + ACCESS_NOTE
+    ),
+    responses={
+      200: resp(
+        "The settings.",
+        ok_example("Settings", "Settings fetched.", data=SETTINGS_EXAMPLE),
+      ),
+      401: UNAUTHORIZED_RESPONSE,
+      403: FORBIDDEN_RESPONSE,
+    },
+  ),
+  patch=extend_schema(
+    operation_id="procurement_settings_update",
+    summary="Update Procurement Settings",
+    description=(
+      "Partial update. Send only the settings you want to change; there is no PUT. "
+      "Send real booleans (`true` / `false`). An empty body changes nothing. "
+      "Returns the full settings. " + SETTINGS_NOTE + " " + OWNER_NOTE
+      + " Accepts JSON."
+    ),
+    request=ProcurementSettingsSerializer,
+    examples=[
+      OpenApiExample(
+        "Manual Alerts Off",
+        value={"auto_rfq_include_manual": False},
+        request_only=True,
+      ),
+      OpenApiExample(
+        "Both Settings",
+        value={"auto_rfq_include_manual": True, "auto_rfq_include_platform_pool": True},
+        request_only=True,
+      ),
+    ],
+    responses={
+      200: resp(
+        "Settings updated.",
+        ok_example(
+          "Updated", "Settings updated.",
+          data={**SETTINGS_EXAMPLE, "auto_rfq_include_manual": False},
+        ),
+      ),
+      400: validation_cases(
+        ("Invalid Value", {"auto_rfq_include_manual": ["Must be a valid boolean."]}),
+        ("Null Value", {"auto_rfq_include_platform_pool": ["This field may not be null."]}),
+      ),
+      401: UNAUTHORIZED_RESPONSE,
+      403: OWNER_ONLY_RESPONSE,
+      429: THROTTLED_RESPONSE,
     },
   ),
 )

@@ -55,6 +55,7 @@ from .SwaggerDocs import (
   supplier_invoice_detail_docs,
   payout_list_docs,
   supplier_payout_list_docs,
+  procurement_settings_docs,
 
 )
 
@@ -97,6 +98,7 @@ from .serializers import (
   GoodsReceiptCreateSerializer,
   GoodsReceiptDetailSerializer,
   GoodsReceiptListSerializer,
+  ProcurementSettingsSerializer,
 )
 from .payout_services import PayoutWebhookError, PayoutError, handle_payout_webhook
 from .services import (
@@ -121,6 +123,8 @@ from .serializers import RFQCreateSerializer
 from .throttles import QuotationWriteThrottle, OrderWriteThrottle
 
 from .po_services import PurchaseOrderError, accept_quotation, cancel_unpaid_order
+from .preferences import get_procurement_settings
+
 
 import logging
 from django.conf import settings
@@ -995,3 +999,22 @@ class SupplierGoodsReceiptDetailApi(APIView):
     return success_response(
       "Goods receipt fetched.", GoodsReceiptDetailSerializer(grn).data
     )
+
+@procurement_settings_docs
+class ProcurementSettingsApi(APIView):
+  def get_permissions(self):
+    if self.request.method in SAFE_METHODS:
+      return [HasBusinessAccess()]
+    return [HasBusinessAccess(), IsOwner()]
+
+  def get(self, request):
+    prefs = get_procurement_settings(request.business)
+    return success_response("Settings fetched.", ProcurementSettingsSerializer(prefs).data)
+
+  def patch(self, request):
+    prefs = get_procurement_settings(request.business)
+    serializer = ProcurementSettingsSerializer(prefs, data=request.data, partial=True)
+    if not serializer.is_valid():
+      return validation_error_response(serializer)
+    serializer.save()
+    return success_response("Settings updated.", serializer.data)
