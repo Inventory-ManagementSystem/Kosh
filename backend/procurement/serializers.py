@@ -22,6 +22,7 @@ from .models import (
     GoodsReceiptItem,
     Payment,
     Payout,
+    ProcurementSettings,
 )
 from .services import calculate_totals
 
@@ -837,3 +838,9 @@ class GoodsReceiptDetailSerializer(GoodsReceiptListSerializer):
     if not self.context.get("show_staff"):
       return None
     return staff_name(obj.received_by)
+
+class ProcurementSettingsSerializer(serializers.ModelSerializer):
+  class Meta:
+    model = ProcurementSettings
+    fields = ["auto_rfq_include_manual", "auto_rfq_include_platform_pool", "updated_at"]
+    read_only_fields = ["updated_at"]

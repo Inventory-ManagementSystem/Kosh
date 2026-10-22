@@ -39,5 +39,6 @@ urlpatterns = [
   path("goods-receipts/<uuid:pk>/", views.GoodsReceiptDetailApi.as_view(), name="grn-detail"),
   path("supplier/goods-receipts/", views.SupplierGoodsReceiptListApi.as_view(), name="supplier-grn-list"),
   path("supplier/goods-receipts/<uuid:pk>/", views.SupplierGoodsReceiptDetailApi.as_view(), name="supplier-grn-detail"),
+  path("settings/", views.ProcurementSettingsApi.as_view(), name="procurement-settings"),
   
 ]

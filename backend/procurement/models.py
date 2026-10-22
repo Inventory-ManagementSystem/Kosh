@@ -630,3 +630,18 @@ class GoodsReceiptDiscrepancy(models.Model):
 
   def __str__(self):
     return f"{self.kind} x {self.quantity}"
+
+class ProcurementSettings(models.Model):
+  id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+  business = models.OneToOneField(
+    "accounts.Business", on_delete=models.CASCADE, related_name="procurement_settings"
+  )
+  auto_rfq_include_manual = models.BooleanField(default=True)
+  auto_rfq_include_platform_pool = models.BooleanField(default=False)
+  updated_at = models.DateTimeField(auto_now=True)
+
+  class Meta:
+    verbose_name_plural = "procurement settings"
+
+  def __str__(self):
+    return f"Settings for {self.business.business_name}"
