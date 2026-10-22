@@ -9,7 +9,7 @@ from notifications import events
 
 from .alert_services import create_alerts_for_business
 from .models import RFQ, PurchaseOrder, ReorderSuggestion, Payout
-from .payment_services import PaymentError, expire_advance, refund_payment
+from .payment_services import PaymentError, expire_advance, refund_payment, send_owner_refund
 from .rfq_services import RFQCreationError, create_rfqs_for_suggestions
 from .preferences import get_procurement_settings
 from .payout_services import PayoutError, send_payout, sync_payout
@@ -163,3 +163,12 @@ def sync_payouts():
     except Exception:
       logger.exception("Couldn't sync payout %s", payout_pk)
   return synced
+
+
+@shared_task(bind=True, max_retries=6, default_retry_delay=600)
+def refund_owner(self, refund_pk):
+  try:
+    return str(send_owner_refund(refund_pk).status)
+  except PaymentError as err:
+    raise self.retry(exc=err)
+
