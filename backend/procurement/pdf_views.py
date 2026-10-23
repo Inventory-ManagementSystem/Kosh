@@ -1,0 +1,129 @@
+from django.http import HttpResponse
+from django.shortcuts import get_object_or_404
+from django.utils.text import slugify
+from rest_framework import status
+from rest_framework.exceptions import NotFound
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.renderers import JSONRenderer
+from rest_framework.views import APIView
+
+from accounts.permissions import HasBusinessAccess
+from accounts.responses import error_response
+from suppliers.permissions import IsSupplier
+
+from . import pdf
+from .models import RFQ, Invoice, Quotation, RFQRecipient
+from .PdfDocs import (
+  quotation_pdf_docs,
+  rfq_pdf_docs,
+  supplier_quotation_pdf_docs,
+  supplier_rfq_pdf_docs,
+  invoice_pdf_docs,
+  supplier_invoice_pdf_docs,
+)
+from .renderers import PDFRenderer
+from .views import get_invitation, invoice_queryset
+
+def pdf_response(content, filename):
+  response = HttpResponse(content, content_type="application/pdf")
+  response["Content-Disposition"] = f'attachment; filename="{filename}"'
+  return response
+
+
+def quotation_filename(quotation):
+  company = slugify(quotation.supplier_profile.company_name) or "supplier"
+  return f"{quotation.rfq.number}-quotation-{company}.pdf"
+
+
+def quotation_for_pdf(**filters):
+  return (
+    Quotation.objects.filter(**filters)
+    .select_related("rfq__business", "supplier_profile__user")
+    .prefetch_related("items__rfq_item", "rfq__items__product")
+    .first()
+  )
+
+
+class PDFView(APIView):
+  renderer_classes = [JSONRenderer, PDFRenderer]
+
+
+@rfq_pdf_docs
+class RFQPdfApi(PDFView):
+  permission_classes = [HasBusinessAccess]
+  def get(self, request, pk):
+    rfq = get_object_or_404(
+      RFQ.objects.select_related("business").prefetch_related("items__product__category"),
+      pk=pk, business=request.business,
+    )
+    return pdf_response(pdf.rfq_pdf(rfq), f"{rfq.number}.pdf")
+
+
+@quotation_pdf_docs
+class QuotationPdfApi(PDFView):
+  permission_classes = [HasBusinessAccess]
+
+  def get(self, request, pk):
+    quotation = quotation_for_pdf(pk=pk, rfq__business=request.business)
+    if quotation is None or quotation.status == Quotation.Status.WITHDRAWN:
+      raise NotFound("Quotation not found.")
+    return pdf_response(pdf.quotation_pdf(quotation), quotation_filename(quotation))
+
+
+@supplier_rfq_pdf_docs
+class SupplierRFQPdfApi(PDFView):
+  permission_classes = [IsAuthenticated, IsSupplier]
+
+  def get(self, request, pk):
+    recipient = get_invitation(
+      RFQRecipient.objects.filter(supplier_profile=request.supplier)
+      .select_related("rfq__business")
+      .prefetch_related("rfq__items__product__category"),
+      pk,
+    )
+    return pdf_response(pdf.rfq_pdf(recipient.rfq), f"{recipient.rfq.number}.pdf")
+
+
+@supplier_quotation_pdf_docs
+class SupplierQuotationPdfApi(PDFView):
+  permission_classes = [IsAuthenticated, IsSupplier]
+
+  def get(self, request, pk):
+    recipient = get_invitation(
+      RFQRecipient.objects.filter(supplier_profile=request.supplier), pk
+    )
+    quotation = quotation_for_pdf(recipient=recipient)
+    if quotation is None:
+      return error_response(
+        "You have not quoted on this RFQ yet.", "NO_QUOTATION",
+        status=status.HTTP_404_NOT_FOUND,
+      )
+    return pdf_response(pdf.quotation_pdf(quotation), quotation_filename(quotation))
+
+def invoice_filename(invoice):
+  company = slugify(invoice.supplier_profile.company_name) or "supplier"
+  return f"{invoice.number}-{company}.pdf"
+
+
+def invoice_for_pdf(base):
+  return invoice_queryset(base).select_related("purchase_order__goods_receipt")
+
+@invoice_pdf_docs
+class InvoicePdfApi(PDFView):
+  permission_classes = [HasBusinessAccess]
+
+  def get(self, request, pk):
+    invoice = get_object_or_404(
+      invoice_for_pdf(Invoice.objects.filter(business=request.business)), pk=pk
+    )
+    return pdf_response(pdf.invoice_pdf(invoice), invoice_filename(invoice))
+
+@supplier_invoice_pdf_docs
+class SupplierInvoicePdfApi(PDFView):
+  permission_classes = [IsAuthenticated, IsSupplier]
+
+  def get(self, request, pk):
+    invoice = get_object_or_404(
+      invoice_for_pdf(Invoice.objects.filter(supplier_profile=request.supplier)), pk=pk
+    )
+    return pdf_response(pdf.invoice_pdf(invoice), invoice_filename(invoice))

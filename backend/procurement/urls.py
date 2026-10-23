@@ -1,5 +1,6 @@
 from django.urls import path
 from . import views
+from . import pdf_views
 
 urlpatterns = [
   path("rfqs/", views.RFQListApi.as_view(), name="rfq-list"),
@@ -40,5 +41,11 @@ urlpatterns = [
   path("supplier/goods-receipts/", views.SupplierGoodsReceiptListApi.as_view(), name="supplier-grn-list"),
   path("supplier/goods-receipts/<uuid:pk>/", views.SupplierGoodsReceiptDetailApi.as_view(), name="supplier-grn-detail"),
   path("settings/", views.ProcurementSettingsApi.as_view(), name="procurement-settings"),
+  path("rfqs/<uuid:pk>/pdf/", pdf_views.RFQPdfApi.as_view(), name="rfq-pdf"),
+  path("quotations/<uuid:pk>/pdf/", pdf_views.QuotationPdfApi.as_view(), name="quotation-pdf"),
+  path("supplier/rfqs/<uuid:pk>/pdf/", pdf_views.SupplierRFQPdfApi.as_view(), name="supplier-rfq-pdf"),
+  path("supplier/rfqs/<uuid:pk>/quotation/pdf/", pdf_views.SupplierQuotationPdfApi.as_view(), name="supplier-quotation-pdf",),
+  path("invoices/<uuid:pk>/pdf/", pdf_views.InvoicePdfApi.as_view(), name="invoice-pdf"),
+  path("supplier/invoices/<uuid:pk>/pdf/", pdf_views.SupplierInvoicePdfApi.as_view(), name="supplier-invoice-pdf"),
   
 ]
