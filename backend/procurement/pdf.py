@@ -397,3 +397,194 @@ def invoice_pdf(invoice):
     Paragraph(footnote, SMALL),
   ]
   return _build(f"{invoice.number} - Invoice from {invoice.supplier_profile.company_name}", story)
+
+def po_pdf(po):
+  rfq = po.rfq
+  shipment = getattr(po, "shipment", None)
+  items = sorted(po.items.all(), key=lambda it: it.product_name.lower())
+  advance_paid = any(p.status == "paid" for p in po.payments.all())
+  balance = po.grand_total - po.advance_amount
+
+  delivery = fmt_date(shipment.expected_delivery_date if shipment else po.delivery_date)
+  if shipment and shipment.is_late:
+    days = shipment.late_by_days
+    delivery += (
+      f' <font color="{WARN.hexval()}">({days} day{"s" if days != 1 else ""} '
+      f'after the promised date)</font>'
+    )
+
+  if po.advance_amount > 0:
+    if advance_paid:
+      advance_text = f"{money(po.advance_amount)} advance (paid)"
+    elif po.status == po.Status.AWAITING_ADVANCE and po.advance_due_by:
+      advance_text = (
+        f"{money(po.advance_amount)} advance, due by {fmt_datetime(po.advance_due_by)}"
+      )
+    else:
+      advance_text = f"{money(po.advance_amount)} advance"
+    payment_terms = [advance_text, f"{money(balance)} after delivery"]
+  else:
+    payment_terms = ["Full amount after delivery"]
+
+  totals = _totals_table(
+    [
+      ("Subtotal", money(po.subtotal)),
+      ("GST", money(po.tax_total)),
+      ("Total (incl. GST)", money(po.grand_total)),
+      ("Advance payment", money(po.advance_amount)),
+      ("Balance after delivery", money(balance)),
+    ],
+    bold_rows=(2,),
+  )
+
+  if po.status == po.Status.CANCELLED:
+    footnote = f"This order was cancelled on {fmt_datetime(po.cancelled_at)}."
+  elif po.status == po.Status.AWAITING_ADVANCE:
+    footnote = "This order is confirmed only after the advance payment is received."
+  else:
+    footnote = (
+      "Prices, GST and quantities are as accepted in the quotation. The supplier's "
+      "invoice is generated when the goods are dispatched."
+    )
+
+  story = [
+    _header("Purchase Order", po.number, po.get_status_display()),
+    Spacer(1, 12),
+    _info_grid([
+      ("Buyer", buyer_lines(po.business)),
+      ("Supplier", supplier_lines(po.supplier_profile)),
+      ("Order date", [fmt_datetime(po.issued_at or po.created_at)]),
+      ("Against RFQ", [esc(rfq.number)]),
+      ("Delivery date", [delivery]),
+      ("Payment terms", payment_terms),
+    ]),
+    Spacer(1, 6),
+    Paragraph("Items ordered", H2),
+    Spacer(1, 4),
+    _items_table(
+      ["#", "Product", "Qty", "Unit price (Rs.)", "GST", "Taxable (Rs.)", "GST (Rs.)", "Total (Rs.)"],
+      [
+        [i, _product_cell(it), it.quantity, money(it.unit_price, False),
+         pct(it.gst_rate), money(it.line_subtotal, False), money(it.line_tax, False),
+         money(it.line_total, False)]
+        for i, it in enumerate(items, 1)
+      ],
+      widths=[0.04, 0.27, 0.07, 0.13, 0.07, 0.15, 0.12, 0.15],
+      right_from=2,
+    ),
+    Spacer(1, 8),
+    totals,
+    Spacer(1, 14),
+    Paragraph(footnote, SMALL),
+  ]
+  return _build(f"{po.number} - Purchase Order for {po.supplier_profile.company_name}", story)
+
+def grn_pdf(grn, show_staff=False):
+  po = grn.purchase_order
+  invoice = po.invoice
+  items = sorted(
+    grn.items.all(), key=lambda it: it.purchase_order_item.product_name.lower()
+  )
+
+  received_on = [fmt_datetime(grn.created_at)]
+  if show_staff and grn.received_by:
+    user = grn.received_by
+    name = getattr(getattr(user, "profile", None), "name", "") or user.email
+    received_on.append(f"By {esc(name)}")
+
+  def product_cell(it):
+    line = it.purchase_order_item
+    text = (
+      f'{esc(line.product_name)}<br/><font size="7.5" color="{MUTED.hexval()}">'
+      f'{esc(line.sku)}</font>'
+    )
+    if it.note:
+      text += f'<br/><font size="7.5" color="{WARN.hexval()}">Note: {esc(it.note)}</font>'
+    return Paragraph(text, CELL)
+
+  order = ["short_shipped", "short_received", "rejected", "excess"]
+  issues = [
+    [it.purchase_order_item.product_name, d.get_kind_display(), d.quantity]
+    for it in items
+    for d in sorted(it.discrepancies.all(), key=lambda d: order.index(d.kind))
+  ]
+  has_excess = any(
+    d.kind == "excess" for it in items for d in it.discrepancies.all()
+  )
+
+  if issues:
+    discrepancy_block = [
+      Paragraph("Discrepancies", H2),
+      Spacer(1, 4),
+      _items_table(
+        ["Product", "Issue", "Quantity"], issues, widths=[0.45, 0.38, 0.17], right_from=2
+      ),
+    ]
+  else:
+    discrepancy_block = [
+      Paragraph("Discrepancies", H2),
+      Spacer(1, 4),
+      Paragraph(
+        "None. The ordered, dispatched and received quantities match and nothing "
+        "was rejected.",
+        TEXT,
+      ),
+    ]
+
+  rows = [
+    ("Invoice total", money(invoice.grand_total)),
+    ("Less: goods receipt credit", money(invoice.discrepancy_credit)),
+    ("Less: advance applied", money(invoice.advance_applied)),
+    ("Balance payable", money(invoice.balance_due)),
+  ]
+  if invoice.refund_due > 0:
+    rows.append(("Advance refundable by supplier", money(invoice.refund_due)))
+
+  footnotes = ["The accepted quantity (received minus rejected) was added to the warehouse stock."]
+  if issues:
+    footnotes.append(
+      "Credit is given for goods that were dispatched and billed but not accepted "
+      "(received short or rejected). Goods the supplier never dispatched were never billed."
+    )
+  if has_excess:
+    footnotes.append(
+      "Units received beyond the dispatched quantity are added to stock but are not billed."
+    )
+
+  story = [
+    _header(
+      "Goods Receipt Note", grn.number,
+      "Discrepancies noted" if issues else "Fully matched",
+    ),
+    Spacer(1, 12),
+    _info_grid([
+      ("Buyer (received at)", buyer_lines(grn.business)),
+      ("Supplier", supplier_lines(po.supplier_profile)),
+      ("Received on", received_on),
+      ("Purchase order", [esc(po.number)]),
+      ("Invoice", [esc(invoice.number)]),
+      ("Delivery promised", [fmt_date(po.delivery_date)]),
+    ]),
+    Spacer(1, 6),
+    Paragraph("Items: ordered, dispatched and received", H2),
+    Spacer(1, 4),
+    _items_table(
+      ["#", "Product", "Ordered", "Dispatched", "Received", "Rejected", "Accepted", "Credit (Rs.)"],
+      [
+        [i, product_cell(it), it.ordered_quantity, it.dispatched_quantity,
+         it.received_quantity, it.rejected_quantity, it.accepted_quantity,
+         money(it.credit_amount, False)]
+        for i, it in enumerate(items, 1)
+      ],
+      widths=[0.04, 0.23, 0.09, 0.12, 0.11, 0.11, 0.11, 0.19],
+      right_from=2,
+    ),
+    Spacer(1, 10),
+    *discrepancy_block,
+    Spacer(1, 10),
+    _totals_table(rows, bold_rows=(3,)),
+    *_notes("Receiving notes", grn.notes),
+    Spacer(1, 14),
+    Paragraph("<br/>".join(footnotes), SMALL),
+  ]
+  return _build(f"{grn.number} - Goods Receipt for {po.number}", story)

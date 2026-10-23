@@ -17,6 +17,8 @@ from .SwaggerDocs import (
     SUPPLIER_NOTE,
     ACCESS_NOTE,
     INVOICE_NOT_FOUND_RESPONSE,
+    PO_DETAIL_NOT_FOUND_RESPONSE,
+    SUPPLIER_PO_NOTE,
 
 )
 
@@ -151,6 +153,107 @@ supplier_invoice_pdf_docs = extend_schema_view(
       401: UNAUTHORIZED_RESPONSE,
       403: NOT_SUPPLIER_RESPONSE,
       404: INVOICE_NOT_FOUND_RESPONSE,
+    },
+  ),
+)
+
+PO_PDF_CONTENT = (
+  "The purchase order as a PDF: buyer details with the owner's name and email, "
+  "supplier details with GSTIN, order number and date, the RFQ it came from, "
+  "delivery date (marked if the supplier set a later expected date at dispatch), "
+  "payment terms (the advance, whether it is paid or still due, and the balance "
+  "after delivery), every line with quantity, unit price, GST and totals, and the "
+  "order totals. It shows the quantities that were ordered; the invoice shows what "
+  "was dispatched. The PDF is built from the current data on every request. File "
+  "name `<PO number>-<other party>.pdf`. Use the order `id` from List Orders. "
+)
+
+po_pdf_docs = extend_schema_view(
+  get=extend_schema(
+    tags=TAGS,
+    operation_id="procurement_orders_pdf",
+    summary="Download Order PDF",
+    description=(
+      PO_PDF_CONTENT + "The owner can download an order in any status, including "
+      "`awaiting_advance` and `cancelled`. " + ACCESS_NOTE + " " + PDF_NOTE
+    ),
+    responses={
+      **PDF_RESPONSE,
+      401: UNAUTHORIZED_RESPONSE,
+      403: FORBIDDEN_RESPONSE,
+      404: PO_DETAIL_NOT_FOUND_RESPONSE,
+    },
+  ),
+)
+
+supplier_po_pdf_docs = extend_schema_view(
+  get=extend_schema(
+    tags=TAGS,
+    operation_id="procurement_supplier_orders_pdf",
+    summary="Supplier: Download Order PDF",
+    description=PO_PDF_CONTENT + SUPPLIER_PO_NOTE + " " + PDF_NOTE,
+    responses={
+      **PDF_RESPONSE,
+      401: UNAUTHORIZED_RESPONSE,
+      403: NOT_SUPPLIER_RESPONSE,
+      404: PO_DETAIL_NOT_FOUND_RESPONSE,
+    },
+  ),
+)
+
+GRN_PDF_NOT_FOUND_RESPONSE = resp(
+  "No such goods receipt for this user. A receipt that belongs to someone else "
+  "also returns this.",
+  err_example("Not Found", "No GoodsReceipt matches the given query.", "NOT_FOUND"),
+)
+
+GRN_PDF_CONTENT = (
+  "The goods receipt note as a PDF: buyer and supplier details, receipt number and "
+  "date, the purchase order and invoice it belongs to, and every line with the "
+  "ordered, dispatched, received, rejected and accepted quantities and the credit "
+  "for that line (the three-way match). A discrepancies table lists each shortage, "
+  "rejection or excess, or states that there are none. It ends with the invoice "
+  "settlement: invoice total, goods receipt credit, advance applied and the balance "
+  "payable, plus the part of the advance the supplier owes back if there is one. "
+  "The PDF is built from the current data on every request. File name "
+  "`<GRN number>-<other party>.pdf`. Use the receipt `id` from List Goods Receipts. "
+)
+
+grn_pdf_docs = extend_schema_view(
+  get=extend_schema(
+    tags=TAGS,
+    operation_id="procurement_goods_receipts_pdf",
+    summary="Download Goods Receipt PDF",
+    description=(
+      GRN_PDF_CONTENT
+      + "It also shows the name of the staff member who confirmed the delivery. "
+      + ACCESS_NOTE + " " + PDF_NOTE
+    ),
+    responses={
+      **PDF_RESPONSE,
+      401: UNAUTHORIZED_RESPONSE,
+      403: FORBIDDEN_RESPONSE,
+      404: GRN_PDF_NOT_FOUND_RESPONSE,
+    },
+  ),
+)
+
+supplier_grn_pdf_docs = extend_schema_view(
+  get=extend_schema(
+    tags=TAGS,
+    operation_id="procurement_supplier_goods_receipts_pdf",
+    summary="Supplier: Download Goods Receipt PDF",
+    description=(
+      GRN_PDF_CONTENT
+      + "Unlike the buyer's copy, it does not show the name of the buyer's staff. "
+      "Supplier only; a supplier can download receipts only for their own orders, "
+      "and a receipt for someone else's order returns a 404. " + PDF_NOTE
+    ),
+    responses={
+      **PDF_RESPONSE,
+      401: UNAUTHORIZED_RESPONSE,
+      403: NOT_SUPPLIER_RESPONSE,
+      404: GRN_PDF_NOT_FOUND_RESPONSE,
     },
   ),
 )

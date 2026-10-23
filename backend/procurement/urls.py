@@ -47,5 +47,9 @@ urlpatterns = [
   path("supplier/rfqs/<uuid:pk>/quotation/pdf/", pdf_views.SupplierQuotationPdfApi.as_view(), name="supplier-quotation-pdf",),
   path("invoices/<uuid:pk>/pdf/", pdf_views.InvoicePdfApi.as_view(), name="invoice-pdf"),
   path("supplier/invoices/<uuid:pk>/pdf/", pdf_views.SupplierInvoicePdfApi.as_view(), name="supplier-invoice-pdf"),
+  path("orders/<uuid:pk>/pdf/", pdf_views.PurchaseOrderPdfApi.as_view(), name="order-pdf"),
+  path("supplier/orders/<uuid:pk>/pdf/", pdf_views.SupplierPurchaseOrderPdfApi.as_view(), name="supplier-order-pdf"),
+  path("goods-receipts/<uuid:pk>/pdf/", pdf_views.GoodsReceiptPdfApi.as_view(), name="grn-pdf"),
+  path("supplier/goods-receipts/<uuid:pk>/pdf/", pdf_views.SupplierGoodsReceiptPdfApi.as_view(), name="supplier-grn-pdf"),
   
 ]

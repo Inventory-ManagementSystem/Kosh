@@ -12,7 +12,7 @@ from accounts.responses import error_response
 from suppliers.permissions import IsSupplier
 
 from . import pdf
-from .models import RFQ, Invoice, Quotation, RFQRecipient
+from .models import RFQ, GoodsReceipt,  Invoice, Quotation, RFQRecipient, PurchaseOrder
 from .PdfDocs import (
   quotation_pdf_docs,
   rfq_pdf_docs,
@@ -20,9 +20,13 @@ from .PdfDocs import (
   supplier_rfq_pdf_docs,
   invoice_pdf_docs,
   supplier_invoice_pdf_docs,
+  po_pdf_docs,
+  supplier_po_pdf_docs,
+  grn_pdf_docs,
+  supplier_grn_pdf_docs,
 )
 from .renderers import PDFRenderer
-from .views import get_invitation, invoice_queryset
+from .views import get_invitation, invoice_queryset, po_queryset, supplier_po_base, grn_queryset, supplier_grn_base
 
 def pdf_response(content, filename):
   response = HttpResponse(content, content_type="application/pdf")
@@ -127,3 +131,52 @@ class SupplierInvoicePdfApi(PDFView):
       invoice_for_pdf(Invoice.objects.filter(supplier_profile=request.supplier)), pk=pk
     )
     return pdf_response(pdf.invoice_pdf(invoice), invoice_filename(invoice))
+
+def po_filename(po, party):
+  return f"{po.number}-{slugify(party) or 'order'}.pdf"
+
+@po_pdf_docs
+class PurchaseOrderPdfApi(PDFView):
+  permission_classes = [HasBusinessAccess]
+
+  def get(self, request, pk):
+    po = get_object_or_404(
+      po_queryset(PurchaseOrder.objects.filter(business=request.business)), pk=pk
+    )
+    return pdf_response(pdf.po_pdf(po), po_filename(po, po.supplier_profile.company_name))
+
+@supplier_po_pdf_docs
+class SupplierPurchaseOrderPdfApi(PDFView):
+  permission_classes = [IsAuthenticated, IsSupplier]
+
+  def get(self, request, pk):
+    po = get_object_or_404(po_queryset(supplier_po_base(request.supplier)), pk=pk)
+    return pdf_response(pdf.po_pdf(po), po_filename(po, po.business.business_name))
+
+def grn_for_pdf(base):
+  return grn_queryset(base).select_related(
+    "business__owner__profile", "purchase_order__supplier_profile__user"
+  )
+
+
+def grn_filename(grn, party):
+  return f"{grn.number}-{slugify(party) or 'receipt'}.pdf"
+
+@grn_pdf_docs
+class GoodsReceiptPdfApi(PDFView):
+  permission_classes = [HasBusinessAccess]
+
+  def get(self, request, pk):
+    grn = get_object_or_404(
+      grn_for_pdf(GoodsReceipt.objects.filter(business=request.business)), pk=pk
+    )
+    company = grn.purchase_order.supplier_profile.company_name
+    return pdf_response(pdf.grn_pdf(grn, show_staff=True), grn_filename(grn, company))
+
+@supplier_grn_pdf_docs
+class SupplierGoodsReceiptPdfApi(PDFView):
+  permission_classes = [IsAuthenticated, IsSupplier]
+
+  def get(self, request, pk):
+    grn = get_object_or_404(grn_for_pdf(supplier_grn_base(request.supplier)), pk=pk)
+    return pdf_response(pdf.grn_pdf(grn), grn_filename(grn, grn.business.business_name))
