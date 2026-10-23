@@ -18,6 +18,7 @@ from .models import (
   PurchaseOrder,
   ReorderSuggestion,
 )
+from .payout_services import settle_after_receipt
 from .po_services import PurchaseOrderError
 
 Kind = GoodsReceiptDiscrepancy.Kind
@@ -164,6 +165,7 @@ def receive_goods(business, po_id, user, lines, notes=""):
   invoice.save(update_fields=[
     "discrepancy_credit", "advance_applied", "balance_due", "refund_due", "updated_at"
   ])
+  settle_after_receipt(po, invoice)
 
   po.status = PurchaseOrder.Status.RECEIVED
   po.save(update_fields=["status", "updated_at"])

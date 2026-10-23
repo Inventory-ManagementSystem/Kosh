@@ -2038,22 +2038,27 @@ po_advance_verify_docs = extend_schema_view(
 )
 
 PAYOUT_NOTE = (
-  "A payout is the advance Kosh collected from the owner, sent on to the supplier "
-  "through RazorpayX automatically when the supplier marks the order dispatched "
-  "(that also creates the invoice). `status` is `on_hold` (the supplier hasn't added "
-  "payout details yet), `pending` (about to be sent), `processing` (RazorpayX accepted "
-  "it), `processed` (money credited; `utr` is the bank reference) or `failed` "
-  "(`failure_reason` says why; the money stays with Kosh and is retried when the "
-  "supplier saves their payout details again). `mode` is `IMPS`, `NEFT` or `UPI`."
+  "A payout is money Kosh sends a supplier through RazorpayX. `kind` is `advance` "
+  "(sent automatically when the supplier marks the order dispatched) or `balance` "
+  "(sent automatically once the owner pays the invoice balance after the goods "
+  "receipt). `gross_amount` is what the supplier earned, `deducted_amount` what was "
+  "held back to repay an earlier overpayment (see the supplier debts list) and "
+  "`amount` what was actually sent. `status` is `on_hold` (no payout details yet), "
+  "`pending`, `processing`, `processed` (`utr` is the bank reference; a payout fully "
+  "used for a repayment is `processed` with `amount` 0) or `failed` (`failure_reason` "
+  "says why; retried when the supplier saves their payout details again)."
 )
 
 PAYOUT_EXAMPLE = {
   "id": "5b2e7c90-1d4a-4f38-9e61-8a3c0d7f2b45",
+  "kind": "advance",
   "purchase_order_id": "2f6b9d04-7c1e-4a83-b5f2-9e0d3a8c6b17",
   "po_number": "PO-0001",
   "invoice_id": "7c1d9e2a-4b6f-4c0e-8d3a-1f5e9b2c7a60",
   "invoice_number": "INV-0001",
   "company_name": "Sharma Traders",
+  "gross_amount": "1000.00",
+  "deducted_amount": "0.00",
   "amount": "1000.00",
   "status": "processed",
   "mode": "IMPS",
@@ -2190,3 +2195,146 @@ procurement_settings_docs = extend_schema_view(
     },
   ),
 )
+
+
+INVOICE_NOT_FOUND_RESPONSE = resp(
+  "No such invoice in this business.",
+  err_example("Not Found", "Invoice not found.", "INVOICE_NOT_FOUND"),
+)
+
+BALANCE_INVOICE_EXAMPLE = {
+  "id": "7c1d9e2a-4b6f-4c0e-8d3a-1f5e9b2c7a60",
+  "number": "INV-0001",
+  "status": "unpaid",
+  "issue_date": "2026-10-16",
+  "purchase_order_id": "2f6b9d04-7c1e-4a83-b5f2-9e0d3a8c6b17",
+  "subtotal": "2250.00",
+  "tax_total": "112.50",
+  "grand_total": "2362.50",
+  "advance_applied": "500.00",
+  "balance_due": "1626.25",
+  "discrepancy_credit": "236.25",
+  "refund_due": "0.00",
+}
+
+BALANCE_NOTE = (
+  "After the goods receipt, the invoice is recalculated from the goods actually "
+  "accepted: `discrepancy_credit` is taken off, `advance_applied` is the advance "
+  "used, and `balance_due` is what the owner still pays. Paying it here sends it on "
+  "to the supplier automatically. If the accepted goods are worth less than the "
+  "advance, `balance_due` is 0, the invoice is already `paid`, and `refund_due` comes "
+  "back to the owner: the part Kosh still holds at once, the part already sent to the "
+  "supplier as it is recovered from their next payouts (`refunds`, `source` `held` or "
+  "`recovered`)."
+)
+
+invoice_balance_docs = extend_schema_view(
+  get=extend_schema(
+    operation_id="procurement_invoices_balance_status",
+    summary="Invoice Balance Status",
+    description=(
+      "The invoice, its balance payments (newest first) and any refunds of the "
+      "owner's advance. " + BALANCE_NOTE + " " + OWNER_NOTE
+    ),
+    responses={
+      200: resp("Balance status.", ok_example("Balance Due", "Balance status.", data={
+        "invoice": BALANCE_INVOICE_EXAMPLE, "payments": [], "refunds": [],
+      })),
+      401: UNAUTHORIZED_RESPONSE,
+      403: OWNER_ONLY_RESPONSE,
+      404: INVOICE_NOT_FOUND_RESPONSE,
+    },
+  ),
+  post=extend_schema(
+    operation_id="procurement_invoices_balance_start",
+    summary="Start Balance Payment",
+    description=(
+      "Opens a Razorpay order for the invoice's `balance_due` and returns the "
+      "Checkout config, exactly like Start Advance Payment (`amount` in paise). "
+      "Calling it again returns the same `order_id`. Allowed only after the goods "
+      "receipt, while the invoice is `unpaid` and `balance_due` is above 0. No request "
+      "body. " + OWNER_NOTE
+    ),
+    request=None,
+    responses={
+      200: resp("Checkout ready.", ok_example("Checkout Ready", "Checkout ready.", data={
+        **CHECKOUT_EXAMPLE, "amount": 162625,
+        "description": "Balance for INV-0001 (PO-0001) - Sharma Traders",
+        "notes": {"invoice_id": "7c1d9e2a-4b6f-4c0e-8d3a-1f5e9b2c7a60",
+                  "purchase_order_id": "2f6b9d04-7c1e-4a83-b5f2-9e0d3a8c6b17"},
+        "invoice_id": "7c1d9e2a-4b6f-4c0e-8d3a-1f5e9b2c7a60",
+      })),
+      401: UNAUTHORIZED_RESPONSE,
+      403: OWNER_ONLY_RESPONSE,
+      404: INVOICE_NOT_FOUND_RESPONSE,
+      409: resp(
+        "Nothing to pay now.",
+        err_example("Not Received", "Confirm the goods receipt before paying the balance.",
+                    "GOODS_NOT_RECEIVED"),
+        err_example("Already Paid", "This invoice is already paid.", "INVOICE_ALREADY_PAID"),
+        err_example("Nothing Due", "Nothing is left to pay on this invoice.", "NO_BALANCE_DUE"),
+      ),
+      429: THROTTLED_RESPONSE,
+      502: GATEWAY_ERROR_RESPONSE,
+      503: PAYMENTS_OFF_RESPONSE,
+    },
+  ),
+)
+
+invoice_balance_verify_docs = extend_schema_view(
+  post=extend_schema(
+    operation_id="procurement_invoices_balance_verify",
+    summary="Verify Balance Payment",
+    description=(
+      "Call from Checkout's success `handler` with the three `razorpay_*` values, "
+      "exactly like Verify Advance Payment. On success the invoice becomes `paid` and "
+      "the balance payout to the supplier starts. Safe to call twice; the webhook also "
+      "confirms it. " + OWNER_NOTE
+    ),
+    request=AdvanceVerifySerializer,
+    responses={
+      200: resp("Payment confirmed.", ok_example(
+        "Paid", "Balance paid. It is being sent to the supplier.",
+        data={"invoice": {**BALANCE_INVOICE_EXAMPLE, "status": "paid"}, "payments": [], "refunds": []},
+      )),
+      400: resp(
+        "The payment could not be verified.",
+        err_example("Bad Signature", "We couldn't verify this payment.", "INVALID_SIGNATURE"),
+      ),
+      401: UNAUTHORIZED_RESPONSE,
+      403: OWNER_ONLY_RESPONSE,
+      404: resp("No such payment on this invoice.",
+                err_example("Not Found", "Payment not found.", "PAYMENT_NOT_FOUND")),
+      409: resp("Not captured yet.",
+                err_example("Not Captured", "This payment isn't complete yet.", "PAYMENT_NOT_CAPTURED")),
+      429: THROTTLED_RESPONSE,
+      502: GATEWAY_ERROR_RESPONSE,
+    },
+  ),
+)
+
+supplier_debt_list_docs = extend_schema_view(
+  get=extend_schema(
+    operation_id="procurement_supplier_debts_list",
+    summary="Supplier: List Money Owed Back",
+    description=(
+      "Overpayments this supplier must repay: their advance payout was more than the "
+      "goods accepted at the goods receipt. `outstanding` is held back automatically "
+      "from their next payouts (any order); `status` becomes `settled` when repaid. "
+      "Filter with `?status=open` or `settled`. Supplier only."
+    ),
+    parameters=[PAGE_PARAMETERS[0], PAGE_PARAMETERS[1]],
+    responses={
+      200: resp("Paginated list.", ok_example("Debts", "Debts fetched.", data=paginated({
+        "id": "3e9a1c55-0b7d-4a2f-9e14-6c8d2f1a7b30",
+        "purchase_order_id": "2f6b9d04-7c1e-4a83-b5f2-9e0d3a8c6b17",
+        "po_number": "PO-0001", "invoice_id": "7c1d9e2a-4b6f-4c0e-8d3a-1f5e9b2c7a60",
+        "invoice_number": "INV-0001", "amount": "200.00", "recovered_amount": "50.00",
+        "outstanding": "150.00", "status": "open", "created_at": "2026-10-18T09:00:00Z",
+      }))),
+      401: UNAUTHORIZED_RESPONSE,
+      403: NOT_SUPPLIER_RESPONSE,
+    },
+  ),
+)
+
