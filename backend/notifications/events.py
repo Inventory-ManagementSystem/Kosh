@@ -322,12 +322,23 @@ def goods_dispatched(po, shipment, invoice):
   notify(po.business.owner, title, body, kind=Kind.PURCHASE_ORDER)
 
 
+def _what(payout):
+  return "advance" if payout.kind == "advance" else "balance payment"
+
+
+def _deduction_note(payout):
+  if payout.deducted_amount and payout.deducted_amount > 0:
+    return (f" {rupees(payout.deducted_amount)} was held back to repay an earlier "
+            "overpayment.")
+  return ""
+
+
 @safe
 def payout_on_hold(payout):
   notify(
     payout.supplier_profile.user,
     f"Add payout details to receive {rupees(payout.amount)}",
-    f"The advance for {payout.purchase_order.number} is ready to be sent to you. "
+    f"The {_what(payout)} for {payout.purchase_order.number} is ready to be sent to you. "
     "Add your bank account or UPI ID in payout settings and we'll send it right away.",
     kind=Kind.PAYMENT,
   )
@@ -337,16 +348,19 @@ def payout_on_hold(payout):
 def payout_sent(payout):
   po = payout.purchase_order
   utr = f" Bank reference (UTR): {payout.utr}." if payout.utr else ""
+  if payout.amount > 0:
+    title = f"{rupees(payout.amount)} {_what(payout)} sent for {po.number}"
+    body = f"The {_what(payout)} for {po.number} has been credited to your account.{utr}"
+  else:
+    title = f"{po.number} {_what(payout)} used to repay an overpayment"
+    body = "Nothing was sent this time."
   notify(
-    payout.supplier_profile.user,
-    f"{rupees(payout.amount)} advance sent for {po.number}",
-    f"The advance for {po.number} has been credited to your account.{utr}",
-    kind=Kind.PAYMENT,
+    payout.supplier_profile.user, title, body + _deduction_note(payout), kind=Kind.PAYMENT,
   )
   notify(
     po.business.owner,
-    f"Advance released to {payout.supplier_profile.company_name}",
-    f"Your advance of {rupees(payout.amount)} for {po.number} was paid to the supplier.",
+    f"{_what(payout).capitalize()} released to {payout.supplier_profile.company_name}",
+    f"{rupees(payout.gross_amount)} for {po.number} was settled with the supplier.",
     kind=Kind.PAYMENT,
     push=False,
   )
@@ -384,3 +398,38 @@ def goods_received(po, grn, invoice):
 
   title = f"{po.number} was received" + (" (with issues)" if issues else "")
   notify(po.supplier_profile.user, title, body, kind=Kind.PURCHASE_ORDER)
+
+
+@safe
+def balance_paid(po, invoice):
+  notify(
+    po.business.owner,
+    f"Balance paid for {invoice.number}",
+    f"We received {rupees(invoice.balance_due)} for {po.number}. "
+    f"It is being sent to {po.supplier_profile.company_name}.",
+    kind=Kind.PAYMENT,
+  )
+
+
+@safe
+def supplier_debt_created(debt):
+  po = debt.purchase_order
+  notify(
+    debt.supplier_profile.user,
+    f"{rupees(debt.amount)} to repay for {po.number}",
+    f"The goods accepted for {po.number} were worth less than the advance you received. "
+    f"{rupees(debt.amount)} will be held back from your next payouts.",
+    kind=Kind.PAYMENT,
+  )
+
+
+@safe
+def owner_refund_sent(refund):
+  notify(
+    refund.invoice.business.owner,
+    f"Refund of {rupees(refund.amount)} for {refund.invoice.number}",
+    f"Part of your advance is being refunded to your original payment method "
+    f"because fewer goods were accepted.",
+    kind=Kind.PAYMENT,
+  )
+

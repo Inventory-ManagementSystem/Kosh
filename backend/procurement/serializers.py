@@ -20,9 +20,11 @@ from .models import (
     GoodsReceipt,
     GoodsReceiptDiscrepancy,
     GoodsReceiptItem,
+    OwnerRefund,
     Payment,
     Payout,
     ProcurementSettings,
+    SupplierDebt,
 )
 from .services import calculate_totals
 
@@ -454,7 +456,7 @@ class PaymentSerializer(serializers.ModelSerializer):
   class Meta:
     model = Payment
     fields = [
-      "id", "amount", "status", "razorpay_order_id", "razorpay_payment_id",
+      "id", "kind", "amount", "status", "razorpay_order_id", "razorpay_payment_id",
       "failure_reason", "refund_id", "paid_at", "created_at",
     ]
     read_only_fields = fields
@@ -713,11 +715,38 @@ class PayoutSerializer(serializers.ModelSerializer):
   class Meta:
     model = Payout
     fields = [
-      "id", "purchase_order_id", "po_number", "invoice_id", "invoice_number",
-      "company_name", "amount", "status", "mode", "utr", "failure_reason",
-      "sent_at", "processed_at", "created_at",
+      "id", "kind", "purchase_order_id", "po_number", "invoice_id", "invoice_number",
+      "company_name", "gross_amount", "deducted_amount", "amount", "status", "mode",
+      "utr", "failure_reason", "sent_at", "processed_at", "created_at",
     ]
     read_only_fields = fields
+
+
+class OwnerRefundSerializer(serializers.ModelSerializer):
+  class Meta:
+    model = OwnerRefund
+    fields = [
+      "id", "amount", "source", "status", "razorpay_refund_id", "failure_reason",
+      "created_at",
+    ]
+    read_only_fields = fields
+
+
+class SupplierDebtSerializer(serializers.ModelSerializer):
+  purchase_order_id = serializers.UUIDField(read_only=True)
+  po_number = serializers.CharField(source="purchase_order.number", read_only=True)
+  invoice_id = serializers.UUIDField(read_only=True)
+  invoice_number = serializers.CharField(source="invoice.number", read_only=True)
+  outstanding = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+
+  class Meta:
+    model = SupplierDebt
+    fields = [
+      "id", "purchase_order_id", "po_number", "invoice_id", "invoice_number",
+      "amount", "recovered_amount", "outstanding", "status", "created_at",
+    ]
+    read_only_fields = fields
+
 MAX_QUANTITY = 1_000_000
  
  

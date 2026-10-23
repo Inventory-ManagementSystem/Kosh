@@ -340,9 +340,17 @@ class Payment(models.Model):
     FAILED = "failed", "Failed"
     REFUNDED = "refunded", "Refunded"
 
+  class Kind(models.TextChoices):
+    ADVANCE = "advance", "Advance"
+    BALANCE = "balance", "Balance"
+
   id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
   purchase_order = models.ForeignKey(
     PurchaseOrder, on_delete=models.CASCADE, related_name="payments"
+  )
+  kind = models.CharField(max_length=10, choices=Kind.choices, default=Kind.ADVANCE)
+  invoice = models.ForeignKey(
+    "Invoice", on_delete=models.PROTECT, null=True, blank=True, related_name="payments"
   )
   amount = models.DecimalField(**MONEY)
   status = models.CharField(max_length=10, choices=Status.choices, default=Status.CREATED)
@@ -361,9 +369,9 @@ class Payment(models.Model):
     ]
     constraints = [
       models.UniqueConstraint(
-        fields=["purchase_order"],
+        fields=["purchase_order", "kind"],
         condition=models.Q(status="paid"),
-        name="uniq_paid_payment_per_po",
+        name="uniq_paid_payment_per_po_kind",
       ),
     ]
  
@@ -499,17 +507,24 @@ class Payout(models.Model):
     PROCESSED = "processed", "Processed"        
     FAILED = "failed", "Failed"                 
 
+  class Kind(models.TextChoices):
+    ADVANCE = "advance", "Advance"      
+    BALANCE = "balance", "Balance"     
+
   ACTIVE = (Status.ON_HOLD, Status.PENDING, Status.PROCESSING, Status.PROCESSED)
 
   id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
   purchase_order = models.ForeignKey(
     PurchaseOrder, on_delete=models.PROTECT, related_name="payouts"
   )
+  kind = models.CharField(max_length=10, choices=Kind.choices, default=Kind.ADVANCE)
   invoice = models.ForeignKey(Invoice, on_delete=models.PROTECT, related_name="payouts")
   supplier_profile = models.ForeignKey(
     "suppliers.SupplierProfile", on_delete=models.PROTECT, related_name="payouts"
   )
-  amount = models.DecimalField(**MONEY)
+  gross_amount = models.DecimalField(**MONEY, default=0)     
+  deducted_amount = models.DecimalField(**MONEY, default=0)  
+  amount = models.DecimalField(**MONEY)                     
   status = models.CharField(max_length=12, choices=Status.choices, default=Status.PENDING)
   mode = models.CharField(max_length=10, blank=True, default="")
   razorpay_payout_id = models.CharField(max_length=40, unique=True, null=True, blank=True)
@@ -532,11 +547,16 @@ class Payout(models.Model):
     ]
     constraints = [
       models.UniqueConstraint(
-        fields=["purchase_order"],
+        fields=["purchase_order", "kind"],
         condition=models.Q(status__in=["on_hold", "pending", "processing", "processed"]),
-        name="uniq_active_payout_per_po",
+        name="uniq_active_payout_per_po_kind",
       ),
-      models.CheckConstraint(condition=models.Q(amount__gt=0), name="payout_amount_positive"),
+      models.CheckConstraint(
+        condition=models.Q(amount__gte=0)
+        & models.Q(deducted_amount__gte=0)
+        & models.Q(amount=models.F("gross_amount") - models.F("deducted_amount")),
+        name="payout_amounts_consistent",
+      ),
     ]
 
   def __str__(self):
@@ -645,3 +665,80 @@ class ProcurementSettings(models.Model):
 
   def __str__(self):
     return f"Settings for {self.business.business_name}"
+
+
+class SupplierDebt(models.Model):
+  class Status(models.TextChoices):
+    OPEN = "open", "Open"
+    SETTLED = "settled", "Settled"
+
+  id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+  supplier_profile = models.ForeignKey(
+    "suppliers.SupplierProfile", on_delete=models.PROTECT, related_name="debts"
+  )
+  purchase_order = models.ForeignKey(
+    PurchaseOrder, on_delete=models.PROTECT, related_name="supplier_debts"
+  )
+  invoice = models.ForeignKey(Invoice, on_delete=models.PROTECT, related_name="supplier_debts")
+  amount = models.DecimalField(**MONEY)
+  recovered_amount = models.DecimalField(**MONEY, default=0)
+  status = models.CharField(max_length=10, choices=Status.choices, default=Status.OPEN)
+  created_at = models.DateTimeField(auto_now_add=True)
+  updated_at = models.DateTimeField(auto_now=True)
+
+  class Meta:
+    ordering = ["created_at"]
+    indexes = [models.Index(fields=["supplier_profile", "status"], name="debt_supplier_status_idx")]
+    constraints = [
+      models.CheckConstraint(
+        condition=models.Q(amount__gt=0)
+        & models.Q(recovered_amount__gte=0)
+        & models.Q(recovered_amount__lte=models.F("amount")),
+        name="debt_amounts_valid",
+      ),
+    ]
+
+  @property
+  def outstanding(self):
+    return self.amount - self.recovered_amount
+
+  def __str__(self):
+    return f"{self.purchase_order.number} debt {self.outstanding}/{self.amount}"
+
+
+class OwnerRefund(models.Model):
+
+  class Status(models.TextChoices):
+    PENDING = "pending", "Pending"
+    PROCESSED = "processed", "Processed"
+    FAILED = "failed", "Failed"
+
+  class Source(models.TextChoices):
+    HELD = "held", "Held by Kosh"              
+    RECOVERED = "recovered", "Recovered"       
+
+  id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+  payment = models.ForeignKey(Payment, on_delete=models.PROTECT, related_name="owner_refunds")
+  invoice = models.ForeignKey(Invoice, on_delete=models.PROTECT, related_name="owner_refunds")
+  debt = models.ForeignKey(
+    SupplierDebt, on_delete=models.PROTECT, null=True, blank=True, related_name="refunds"
+  )
+  recovered_by = models.ForeignKey(
+    Payout, on_delete=models.PROTECT, null=True, blank=True, related_name="recoveries"
+  )
+  source = models.CharField(max_length=10, choices=Source.choices)
+  amount = models.DecimalField(**MONEY)
+  status = models.CharField(max_length=10, choices=Status.choices, default=Status.PENDING)
+  razorpay_refund_id = models.CharField(max_length=64, blank=True, default="")
+  failure_reason = models.CharField(max_length=255, blank=True, default="")
+  created_at = models.DateTimeField(auto_now_add=True)
+  updated_at = models.DateTimeField(auto_now=True)
+
+  class Meta:
+    ordering = ["-created_at"]
+    constraints = [
+      models.CheckConstraint(condition=models.Q(amount__gt=0), name="owner_refund_positive"),
+    ]
+
+  def __str__(self):
+    return f"{self.invoice.number} refund {self.amount} ({self.status})"
