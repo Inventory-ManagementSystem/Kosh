@@ -1,5 +1,5 @@
 from drf_spectacular.types import OpenApiTypes
-from drf_spectacular.utils import extend_schema, extend_schema_view
+from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiParameter
 
 from accounts.swagger import (
   UNAUTHORIZED_RESPONSE,
@@ -254,6 +254,74 @@ supplier_grn_pdf_docs = extend_schema_view(
       401: UNAUTHORIZED_RESPONSE,
       403: NOT_SUPPLIER_RESPONSE,
       404: GRN_PDF_NOT_FOUND_RESPONSE,
+    },
+  ),
+)
+
+def _weight_parameter(name, label):
+  return OpenApiParameter(
+    f"weight_{name}", OpenApiTypes.NUMBER, OpenApiParameter.QUERY, required=False,
+    description=(
+      f"How much {label} matters, from 0 to 1000. Weights are relative, so they "
+      "don't need to add up to 100. Send the slider values for all four weights, or "
+      "none. If none are sent, the defaults are used (price 50, delivery 25, payment "
+      "10, reliability 15). If any is sent, the ones left out count as 0."
+    ),
+  )
+
+COMPARISON_PARAMETERS = [
+  _weight_parameter("price", "the total price"),
+  _weight_parameter("delivery", "fast delivery"),
+  _weight_parameter("payment", "payment terms (a smaller advance scores higher)"),
+  _weight_parameter("reliability", "supplier reliability"),
+  OpenApiParameter(
+    "sort", OpenApiTypes.STR, OpenApiParameter.QUERY, required=False, enum=["price"],
+    description=(
+      "Send `price` to list the quotations from the lowest total price instead of "
+      "from the best score. The rank and score columns still show the score-based "
+      "result. Any other value is ignored."
+    ),
+  ),
+]
+
+rfq_comparison_pdf_docs = extend_schema_view(
+  get=extend_schema(
+    tags=TAGS,
+    operation_id="procurement_rfqs_quotations_pdf",
+    summary="Download Quotation Comparison PDF",
+    description=(
+      "The ranked comparison of an RFQ's quotations as a PDF, for the owner to keep "
+      "or share when deciding: RFQ details, the recommended supplier, a ranking table "
+      "(supplier, badges `recommended` / `cheapest` / `fastest`, total, advance, "
+      "delivery time, score), the score breakdown per criterion with the weights "
+      "used, and a short note on how the score is calculated. Withdrawn quotations "
+      "are left out. An RFQ with no quotations still returns a PDF that says so.\n\n"
+      "It uses the same ranking and the same query parameters as List Quotations for "
+      "RFQ, so pass the same weights and `sort` the screen is currently showing and "
+      "the PDF will match it. The weights are not remembered between requests; "
+      "without them the default weights are used. A criterion that no quotation can "
+      "be scored on yet (reliability, while no data exists) is ignored and the PDF "
+      "says so. Owner and employees only; there is no supplier version, because the "
+      "comparison shows every supplier's prices. File name `<RFQ number>-comparison.pdf`. "
+      + ACCESS_NOTE + " " + PDF_NOTE
+    ),
+    parameters=COMPARISON_PARAMETERS,
+    responses={
+      **PDF_RESPONSE,
+      400: resp(
+        "The weights are not valid.",
+        err_example(
+          "Bad Weight", "weight_price must be a number from 0 to 1000.", "INVALID_WEIGHTS",
+        ),
+        err_example(
+          "No Usable Weight",
+          "Give at least one scorable parameter a weight above 0.",
+          "INVALID_WEIGHTS",
+        ),
+      ),
+      401: UNAUTHORIZED_RESPONSE,
+      403: FORBIDDEN_RESPONSE,
+      404: NOT_FOUND_RESPONSE,
     },
   ),
 )

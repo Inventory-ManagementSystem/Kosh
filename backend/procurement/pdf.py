@@ -10,6 +10,8 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from .ranking import DEFAULT_WEIGHTS
+
 
 IST = ZoneInfo("Asia/Kolkata")
 
@@ -588,3 +590,132 @@ def grn_pdf(grn, show_staff=False):
     Paragraph("<br/>".join(footnotes), SMALL),
   ]
   return _build(f"{grn.number} - Goods Receipt for {po.number}", story)
+
+def comparison_pdf(rfq, ordered, weights, by_price=False):
+  created = rfq.created_at.date()
+  criteria = [
+    ("price", "Price"), ("delivery", "Delivery"),
+    ("payment", "Payment terms"), ("reliability", "Reliability"),
+  ]
+  badge_names = {"recommended": "Recommended", "cheapest": "Cheapest", "fastest": "Fastest"}
+  items_text = "; ".join(f"{it.product_name} x {it.quantity}" for it in rfq.items.all()) or "-"
+
+  info = [
+    ("Buyer", buyer_lines(rfq.business)),
+    ("RFQ", [
+      f"<b>{esc(rfq.number)}</b>",
+      f"Issued: {fmt_datetime(rfq.created_at)}",
+      f"Quote by: {fmt_datetime(rfq.deadline)}",
+    ]),
+    ("Items requested", [esc(items_text)]),
+    ("Quotations compared", [str(len(ordered))]),
+  ]
+  story = [
+    _header("Quotation Comparison", rfq.number, rfq.get_status_display()),
+    Spacer(1, 12),
+  ]
+  title = f"{rfq.number} - Quotation comparison"
+
+  if not ordered:
+    story += [
+      _info_grid(info), Spacer(1, 6),
+      Paragraph("No quotations have been submitted for this RFQ yet.", TEXT),
+    ]
+    return _build(title, story)
+
+  first = ordered[0]["breakdown"]
+  used = [
+    f"{label} {first[key]['weight']:g}%"
+    for key, label in criteria if first[key]["weight"] > 0
+  ]
+  kind = "Default weighting" if weights == DEFAULT_WEIGHTS else "Custom weighting chosen by the buyer"
+  info.append(("Weighting", [kind, esc(", ".join(used))]))
+  no_data = [
+    label for key, label in criteria
+    if all(r["breakdown"][key]["score"] is None for r in ordered)
+  ]
+
+  rank_rows = []
+  for r in ordered:
+    q = r["quotation"]
+    sp = q.supplier_profile
+    days = max((q.delivery_date - created).days, 1)
+    plural = "" if days == 1 else "s"
+    rank_rows.append([
+      r["rank"],
+      Paragraph(
+        f'<b>{esc(sp.company_name)}</b><br/><font size="7.5" color="{MUTED.hexval()}">'
+        f'{esc(sp.city)} | {esc(q.recipient.get_source_display())} | '
+        f'{esc(q.get_status_display())}</font>',
+        CELL,
+      ),
+      Paragraph("<br/>".join(badge_names.get(b, b) for b in r["badges"]) or "-", CELL),
+      money(q.grand_total),
+      money(q.advance_amount) if q.advance_amount > 0 else "No advance",
+      f"{fmt_date(q.delivery_date)} ({days} day{plural})",
+      f"{r['score']:.1f}",
+    ])
+
+  breakdown_rows = []
+  for r in ordered:
+    row = [r["quotation"].supplier_profile.company_name]
+    for key, _label in criteria:
+      score = r["breakdown"][key]["score"]
+      row.append("-" if score is None else f"{score:.1f}")
+    row.append(f"{r['score']:.1f}")
+    breakdown_rows.append(row)
+  breakdown_head = ["Supplier"] + [
+    f"{label} ({first[key]['weight']:g}%)" if first[key]["weight"] > 0 else f"{label} (not used)"
+    for key, label in criteria
+  ] + ["Overall"]
+
+  top = next((r for r in ordered if r["rank"] == 1), None)
+  if top:
+    q = top["quotation"]
+    story += [
+      _info_grid(info),
+      Paragraph(
+        f"<b>Recommended:</b> {esc(q.supplier_profile.company_name)}, score "
+        f"{top['score']:.1f} out of 100, total {money(q.grand_total)}.",
+        TEXT,
+      ),
+      Spacer(1, 10),
+    ]
+
+  story += [
+    Paragraph("Ranking", H2),
+    Spacer(1, 4),
+    _items_table(
+      ["Rank", "Supplier", "Badges", "Total (incl. GST)", "Advance", "Delivery", "Score"],
+      rank_rows,
+      widths=[0.05, 0.21, 0.15, 0.18, 0.15, 0.16, 0.10],
+      right_from=3,
+    ),
+  ]
+  if by_price:
+    story += [
+      Spacer(1, 4),
+      Paragraph("Listed by price, lowest first. The rank column still shows the score-based rank.", SMALL),
+    ]
+  story += [
+    Spacer(1, 12),
+    Paragraph("Score breakdown (each criterion out of 100)", H2),
+    Spacer(1, 4),
+    _items_table(
+      breakdown_head, breakdown_rows,
+      widths=[0.30, 0.14, 0.14, 0.16, 0.14, 0.12], right_from=1,
+    ),
+  ]
+
+  notes = [
+    "The score (0-100) is the weighted average of the criteria above. Price: the lowest "
+    "total divided by this quotation's total. Delivery: the fastest delivery time divided "
+    "by this quotation's, counted from the RFQ issue date. Payment terms: higher when less "
+    "advance is asked. Withdrawn quotations are not included.",
+    "The ranking is a recommendation to help the buyer decide; the buyer chooses which "
+    "quotation to accept.",
+  ]
+  if no_data:
+    notes.insert(1, f"Not counted because no data exists yet: {', '.join(no_data)}.")
+  story += [Spacer(1, 14), Paragraph("<br/>".join(notes), SMALL)]
+  return _build(title, story)

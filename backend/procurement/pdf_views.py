@@ -24,9 +24,13 @@ from .PdfDocs import (
   supplier_po_pdf_docs,
   grn_pdf_docs,
   supplier_grn_pdf_docs,
+  rfq_comparison_pdf_docs,
+
 )
 from .renderers import PDFRenderer
 from .views import get_invitation, invoice_queryset, po_queryset, supplier_po_base, grn_queryset, supplier_grn_base
+from .ranking import WeightError, parse_weights, rank_quotations
+
 
 def pdf_response(content, filename):
   response = HttpResponse(content, content_type="application/pdf")
@@ -180,3 +184,32 @@ class SupplierGoodsReceiptPdfApi(PDFView):
   def get(self, request, pk):
     grn = get_object_or_404(grn_for_pdf(supplier_grn_base(request.supplier)), pk=pk)
     return pdf_response(pdf.grn_pdf(grn), grn_filename(grn, grn.business.business_name))
+
+@rfq_comparison_pdf_docs
+class RFQComparisonPdfApi(PDFView):
+  permission_classes = [HasBusinessAccess]
+
+  def get(self, request, pk):
+    rfq = get_object_or_404(
+      RFQ.objects.select_related("business__owner__profile").prefetch_related("items"),
+      pk=pk, business=request.business,
+    )
+    quotations = list(
+      rfq.quotations.exclude(status=Quotation.Status.WITHDRAWN)
+      .select_related("rfq", "supplier_profile", "recipient")
+    )
+    try:
+      weights = parse_weights(request.query_params)
+      ranked = rank_quotations(quotations, weights)
+    except WeightError as err:
+      return error_response(err.message, err.code, status=status.HTTP_400_BAD_REQUEST)
+
+    by_price = request.query_params.get("sort") == "price"
+    ordered = ranked
+    if by_price:
+      ordered = sorted(
+        ranked, key=lambda r: (r["quotation"].grand_total, r["quotation"].submitted_at)
+      )
+    return pdf_response(
+      pdf.comparison_pdf(rfq, ordered, weights, by_price), f"{rfq.number}-comparison.pdf"
+    )
