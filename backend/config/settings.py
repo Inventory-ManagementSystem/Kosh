@@ -82,6 +82,7 @@ INSTALLED_APPS = [
     'inventory',
     'suppliers',
     'notifications',
+    'channels',
     'rest_framework_simplejwt.token_blacklist',
     'django.contrib.sites',
     'allauth',
@@ -95,6 +96,7 @@ INSTALLED_APPS = [
     'django_cleanup.apps.CleanupConfig',
     'procurement',
     'assistant.apps.AssistantConfig',
+
 ]
 
 JAZZMIN_SETTINGS = {
@@ -167,6 +169,24 @@ CACHES = {
         },
     },
 }
+
+CHANNEL_REDIS_URL = os.getenv("CHANNEL_REDIS_URL", "redis://redis:6379/2")
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        "CONFIG": {
+            "hosts": [{
+                "address": CHANNEL_REDIS_URL,
+                "socket_timeout": 30,
+                "socket_connect_timeout": 10,
+                "socket_keepalive": True,
+                "health_check_interval": 30,
+            }],
+        },
+    },
+}
+WS_TICKET_TTL_SECONDS = 30
+REALTIME_PUSH_ENABLED = os.getenv("REALTIME_PUSH_ENABLED", "True").lower() == "true"
 
 PO_ADVANCE_EXPIRY_HOURS = int(os.getenv("PO_ADVANCE_EXPIRY_HOURS", "24"))
 CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://redis:6379/0")

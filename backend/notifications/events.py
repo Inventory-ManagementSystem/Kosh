@@ -294,6 +294,8 @@ def advance_refunded(po, amount):
     f"so it's being refunded to the original payment method.",
     kind=Kind.PAYMENT,
   )
+
+@safe
 def goods_dispatched(po, shipment, invoice):
   sent = {s.purchase_order_item_id: s.quantity for s in shipment.items.all()}
   short = []

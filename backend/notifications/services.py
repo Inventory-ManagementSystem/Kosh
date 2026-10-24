@@ -1,6 +1,7 @@
 from django.db import transaction
 from .models import Notification
 from .push import send_push_to_user
+from .realtime import push_notifications
 
 
 def _push_after_commit(user_id, title, body):
@@ -14,6 +15,7 @@ def notify(user, title, body="", kind=Notification.Kind.GENERAL, push=True):
     title=title[:150],
     body=body,
   )
+  push_notifications([notification])
   if push:
     _push_after_commit(user.pk, notification.title, body)
   return notification
@@ -25,6 +27,7 @@ def notify_many(users, title, body="", kind=Notification.Kind.GENERAL, push=True
     Notification(user=user, kind=kind, title=title[:150], body=body)
     for user in users
   ])
+  push_notifications(notifications)
   if push:
     for user in users:
       _push_after_commit(user.pk, title[:150], body)

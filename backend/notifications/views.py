@@ -16,6 +16,7 @@ from accounts.swagger import UNAUTHORIZED_RESPONSE, err_example, ok_example, res
 from .models import DeviceToken, Notification
 from .push import push_enabled, send_push_to_user
 from .serializers import DeviceTokenSerializer, NotificationSerializer
+from .ws_tickets import issue_ticket
 
 
 NOTIFICATION_EXAMPLE = {
@@ -353,3 +354,30 @@ class PushTestApi(APIView):
       return push_disabled_error()
     sent = send_push_to_user(request.user.pk, "Kosh test notification", "Push is working.")
     return success_response("Test push sent.", {"sent": sent})
+
+class WsTicketApi(APIView):
+  permission_classes = [IsAuthenticated]
+  throttle_classes = [UserRateThrottle]
+
+  @extend_schema(
+    summary="Get a WebSocket Ticket",
+    description=(
+      "Returns a random one-time ticket that is valid for 30 seconds. Open "
+      "`wss://<host>/ws/notifications/?ticket=<ticket>` with it to receive "
+      "notifications live. Each ticket works once, so fetch a new one for "
+      "every connection attempt."
+    ),
+    request=None,
+    responses={
+      200: resp("Ticket issued.",
+                ok_example("Ticket", "WebSocket ticket issued.",
+                           data={"ticket": "q3F...urlsafe...", "expires_in": 30})),
+      401: UNAUTHORIZED_RESPONSE,
+    },
+  )
+  def post(self, request):
+    ticket = issue_ticket(request.user.pk)
+    return success_response(
+      "WebSocket ticket issued.",
+      {"ticket": ticket, "expires_in": settings.WS_TICKET_TTL_SECONDS},
+    )
