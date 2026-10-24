@@ -499,11 +499,16 @@ class PurchaseOrderListSerializer(PurchaseOrderSummarySerializer):
   expected_delivery_date = serializers.SerializerMethodField()
   is_late = serializers.SerializerMethodField()
   late_by_days = serializers.SerializerMethodField()
+  invoice_id = serializers.UUIDField(source="invoice.id", read_only=True, default=None)
+  invoice_number = serializers.CharField(source="invoice.number", read_only=True, default=None)
+  grn_id = serializers.UUIDField(source="goods_receipt.id", read_only=True, default=None)
+  grn_number = serializers.CharField(source="goods_receipt.number", read_only=True, default=None)
 
   class Meta(PurchaseOrderSummarySerializer.Meta):
     fields = PurchaseOrderSummarySerializer.Meta.fields + [
       "item_count", "total_quantity", "dispatch_date", "expected_delivery_date",
       "is_late", "late_by_days",
+      "invoice_id", "invoice_number", "grn_id", "grn_number",
     ]
     read_only_fields = fields
 

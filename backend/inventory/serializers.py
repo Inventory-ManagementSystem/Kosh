@@ -73,6 +73,8 @@ class ProductSerializer(serializers.ModelSerializer):
         read_only=True
     )
 
+    is_active = serializers.BooleanField(required=False, default=True)
+
     opening_quantity = serializers.IntegerField(
         write_only=True,
         required=False,

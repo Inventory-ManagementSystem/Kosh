@@ -1340,6 +1340,10 @@ PURCHASE_ORDER_LIST_ITEM_EXAMPLE = {
   "expected_delivery_date": "2026-10-15",
   "is_late": False,
   "late_by_days": 0,
+  "invoice_id": None,
+  "invoice_number": None,
+  "grn_id": None,
+  "grn_number": None,
 }
 
 PURCHASE_ORDER_DETAIL_EXAMPLE = {
