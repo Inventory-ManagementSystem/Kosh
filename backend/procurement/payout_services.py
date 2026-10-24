@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import uuid
+from decimal import Decimal
 
 import requests
 from django.conf import settings
@@ -13,7 +14,7 @@ from django.utils import timezone
 from notifications import events
 from suppliers.models import SupplierPayoutAccount
 
-from .models import Payment, Payout
+from .models import OwnerRefund, Payment, Payout, SupplierDebt
 from .payment_services import to_paise
 
 logger = logging.getLogger(__name__)
@@ -161,21 +162,26 @@ def release_held_payouts(supplier):
     _enqueue(payout)
     released += 1
 
-  failed_po_ids = set(
+  failed = set(
     Payout.objects.filter(supplier_profile=supplier, status=Payout.Status.FAILED)
-    .values_list("purchase_order_id", flat=True)
+    .values_list("purchase_order_id", "kind")
   )
-  for po_id in failed_po_ids:
-    if Payout.objects.filter(purchase_order_id=po_id, status__in=Payout.ACTIVE).exists():
+  for po_id, kind in failed:
+    if Payout.objects.filter(
+      purchase_order_id=po_id, kind=kind, status__in=Payout.ACTIVE
+    ).exists():
       continue
     last = (
-      Payout.objects.filter(purchase_order_id=po_id, status=Payout.Status.FAILED)
+      Payout.objects.filter(purchase_order_id=po_id, kind=kind, status=Payout.Status.FAILED)
       .order_by("-created_at").first()
     )
     retry = Payout.objects.create(
       purchase_order_id=po_id,
       invoice_id=last.invoice_id,
       supplier_profile=supplier,
+      kind=kind,
+      gross_amount=last.gross_amount,
+      deducted_amount=last.deducted_amount,
       amount=last.amount,
       status=Payout.Status.PENDING,
     )
@@ -190,31 +196,140 @@ def _enqueue(payout):
   transaction.on_commit(lambda: send_advance_payout.delay(payout_id))
 
 
-def create_advance_payout(po, invoice):
-  amount = invoice.advance_applied
-  if amount <= 0:
+def _recover_debts(supplier_id, gross):
+  held_back = Decimal("0")
+  taken = []
+  debts = SupplierDebt.objects.select_for_update().filter(
+    supplier_profile_id=supplier_id, status=SupplierDebt.Status.OPEN
+  ).order_by("created_at")
+  for debt in debts:
+    room = gross - held_back
+    if room <= 0:
+      break
+    part = min(debt.outstanding, room)
+    debt.recovered_amount += part
+    if debt.recovered_amount >= debt.amount:
+      debt.status = SupplierDebt.Status.SETTLED
+    debt.save(update_fields=["recovered_amount", "status", "updated_at"])
+    held_back += part
+    taken.append((debt, part))
+  return held_back, taken
+
+
+def _create_payout(po, invoice, kind, gross):
+  if gross <= 0:
     return None
-  if not Payment.objects.filter(purchase_order=po, status=Payment.Status.PAID).exists():
-    logger.error("PO %s has an advance on its invoice but no paid payment", po.number)
-    return None
-  if Payout.objects.filter(purchase_order=po, status__in=Payout.ACTIVE).exists():
+  if Payout.objects.filter(purchase_order=po, kind=kind, status__in=Payout.ACTIVE).exists():
     return None
 
+  held_back, taken = _recover_debts(po.supplier_profile_id, gross)
+  net = gross - held_back
   has_account = SupplierPayoutAccount.objects.filter(
     supplier_profile_id=po.supplier_profile_id
   ).exists()
+
+  if net == 0:
+    status = Payout.Status.PROCESSED 
+  elif has_account:
+    status = Payout.Status.PENDING
+  else:
+    status = Payout.Status.ON_HOLD
+
   payout = Payout.objects.create(
     purchase_order=po,
     invoice=invoice,
     supplier_profile_id=po.supplier_profile_id,
-    amount=amount,
-    status=Payout.Status.PENDING if has_account else Payout.Status.ON_HOLD,
+    kind=kind,
+    gross_amount=gross,
+    deducted_amount=held_back,
+    amount=net,
+    status=status,
+    processed_at=timezone.now() if net == 0 else None,
   )
-  if has_account:
+
+  for debt, part in taken:
+    advance = Payment.objects.filter(
+      purchase_order_id=debt.purchase_order_id,
+      kind=Payment.Kind.ADVANCE, status=Payment.Status.PAID,
+    ).first()
+    if advance is None:
+      logger.error("Debt %s has no paid advance to refund", debt.pk)
+      continue
+    refund = OwnerRefund.objects.create(
+      payment=advance, invoice_id=debt.invoice_id, debt=debt, recovered_by=payout,
+      source=OwnerRefund.Source.RECOVERED, amount=part,
+    )
+    _enqueue_refund(refund)
+
+  if status == Payout.Status.PENDING:
     _enqueue(payout)
-  else:
+  elif status == Payout.Status.ON_HOLD:
     transaction.on_commit(lambda: events.payout_on_hold(payout))
+  else:
+    transaction.on_commit(lambda: events.payout_sent(payout))
   return payout
+
+
+def create_advance_payout(po, invoice):
+  if invoice.advance_applied <= 0:
+    return None
+  if not Payment.objects.filter(
+    purchase_order=po, kind=Payment.Kind.ADVANCE, status=Payment.Status.PAID
+  ).exists():
+    logger.error("PO %s has an advance on its invoice but no paid payment", po.number)
+    return None
+  return _create_payout(po, invoice, Payout.Kind.ADVANCE, invoice.advance_applied)
+
+
+def create_balance_payout(po, invoice):
+  return _create_payout(po, invoice, Payout.Kind.BALANCE, invoice.balance_due)
+
+
+def _enqueue_refund(refund):
+  from .tasks import refund_owner
+  refund_id = str(refund.pk)
+  transaction.on_commit(lambda: refund_owner.delay(refund_id))
+
+
+def settle_after_receipt(po, invoice):
+  if invoice.balance_due <= 0 and invoice.status != invoice.Status.PAID:
+    invoice.status = invoice.Status.PAID
+    invoice.save(update_fields=["status", "updated_at"])
+
+  payable = invoice.grand_total - invoice.discrepancy_credit
+  advance = po.advance_amount
+  if payable >= advance:
+    return None
+
+  advance_payout = (
+    Payout.objects.filter(purchase_order=po, kind=Payout.Kind.ADVANCE)
+    .exclude(status=Payout.Status.FAILED).order_by("-created_at").first()
+    or Payout.objects.filter(purchase_order=po, kind=Payout.Kind.ADVANCE)
+    .order_by("-created_at").first()
+  )
+  paid_to_supplier = advance_payout.gross_amount if advance_payout else Decimal("0")
+  owed_by_supplier = max(paid_to_supplier - payable, Decimal("0"))
+  held_by_kosh = (advance - payable) - owed_by_supplier
+
+  debt = None
+  if owed_by_supplier > 0:
+    debt = SupplierDebt.objects.create(
+      supplier_profile_id=po.supplier_profile_id, purchase_order=po,
+      invoice=invoice, amount=owed_by_supplier,
+    )
+    transaction.on_commit(lambda: events.supplier_debt_created(debt))
+
+  if held_by_kosh > 0:
+    payment = Payment.objects.filter(
+      purchase_order=po, kind=Payment.Kind.ADVANCE, status=Payment.Status.PAID
+    ).first()
+    if payment is not None:
+      refund = OwnerRefund.objects.create(
+        payment=payment, invoice=invoice, source=OwnerRefund.Source.HELD,
+        amount=held_by_kosh,
+      )
+      _enqueue_refund(refund)
+  return debt
 
 
 def _mode_for(account, amount_paise):

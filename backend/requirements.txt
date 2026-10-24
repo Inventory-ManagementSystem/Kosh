@@ -24,3 +24,4 @@ celery
 firebase-admin
 google-genai
 razorpay==2.0.1
+reportlab==5.0.1

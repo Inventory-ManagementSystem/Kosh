@@ -12,7 +12,7 @@ from django.utils import timezone
 
 from notifications import events
 
-from .models import RFQ, Payment, PurchaseOrder, Quotation
+from .models import RFQ, Invoice, OwnerRefund, Payment, PurchaseOrder, Quotation
 from .po_services import PurchaseOrderError, confirm_order
 
 logger = logging.getLogger(__name__)
@@ -59,12 +59,12 @@ def _gateway(call):
 
 
 def _ensure_payable(po):
+  if po.advance_amount <= 0:
+    raise PaymentError("This order has no advance to pay.", "NO_ADVANCE_DUE")
   if po.status == PurchaseOrder.Status.CANCELLED:
     raise PaymentError("This order was cancelled.", "ORDER_CANCELLED")
   if po.status != PurchaseOrder.Status.AWAITING_ADVANCE:
     raise PaymentError("The advance for this order is already paid.", "ADVANCE_ALREADY_PAID")
-  if po.advance_amount <= 0:
-    raise PaymentError("This order has no advance to pay.", "NO_ADVANCE_DUE")
   if po.advance_due_by and po.advance_due_by <= timezone.now():
     raise PaymentError("The time to pay this advance has run out.", "ADVANCE_EXPIRED")
 
@@ -83,7 +83,7 @@ def start_advance_payment(business, po_id):
   _ensure_payable(po)
 
   payment = po.payments.filter(
-    status=Payment.Status.CREATED, amount=po.advance_amount
+    kind=Payment.Kind.ADVANCE, status=Payment.Status.CREATED, amount=po.advance_amount
   ).first()
   if payment:
     return po, payment
@@ -107,7 +107,7 @@ def start_advance_payment(business, po_id):
 
 
 
-def verify_advance_payment(business, po_id, order_id, payment_id, signature):
+def _verify(payments, order_id, payment_id, signature):
   client = _client()
   try:
     client.utility.verify_payment_signature({
@@ -118,16 +118,18 @@ def verify_advance_payment(business, po_id, order_id, payment_id, signature):
   except razorpay.errors.SignatureVerificationError as err:
     raise PaymentError("We couldn't verify this payment.", "INVALID_SIGNATURE") from err
 
-  exists = Payment.objects.filter(
-    razorpay_order_id=order_id,
-    purchase_order_id=po_id,
-    purchase_order__business=business,
-  ).exists()
-  if not exists:
+  if not payments.filter(razorpay_order_id=order_id).exists():
     raise PaymentError("Payment not found.", "PAYMENT_NOT_FOUND")
 
   gateway_payment = _gateway(lambda c: c.payment.fetch(payment_id))
   return record_captured_payment(order_id, gateway_payment)
+
+
+def verify_advance_payment(business, po_id, order_id, payment_id, signature):
+  payments = Payment.objects.filter(
+    kind=Payment.Kind.ADVANCE, purchase_order_id=po_id, purchase_order__business=business
+  )
+  return _verify(payments, order_id, payment_id, signature)
 
 
 def record_captured_payment(order_id, gateway_payment):
@@ -162,6 +164,8 @@ def _apply_capture(order_id, payment_id, amount_paise):
     raise PaymentError("The paid amount doesn't match the advance.", "AMOUNT_MISMATCH")
 
   payment.razorpay_payment_id = payment_id
+  if payment.kind == Payment.Kind.BALANCE:
+    return _apply_balance_capture(payment, po)
 
   if po.status != PurchaseOrder.Status.AWAITING_ADVANCE:
     payment.status = Payment.Status.REFUNDED
@@ -179,6 +183,36 @@ def _apply_capture(order_id, payment_id, amount_paise):
   ])
   po = confirm_order(po) 
   transaction.on_commit(lambda: events.advance_paid(po))
+  return po
+
+
+def _refund_whole(payment, reason):
+  payment.status = Payment.Status.REFUNDED
+  payment.failure_reason = reason
+  payment.save(update_fields=["status", "razorpay_payment_id", "failure_reason", "updated_at"])
+  from .tasks import refund_advance_payment
+  payment_pk = str(payment.pk)
+  transaction.on_commit(lambda: refund_advance_payment.delay(payment_pk))
+
+
+def _apply_balance_capture(payment, po):
+  invoice = Invoice.objects.select_for_update().get(pk=payment.invoice_id)
+  if invoice.status == Invoice.Status.PAID or invoice.balance_due != payment.amount:
+    _refund_whole(payment, "The invoice was already settled; refunding.")
+    return po
+
+  payment.status = Payment.Status.PAID
+  payment.paid_at = timezone.now()
+  payment.failure_reason = ""
+  payment.save(update_fields=[
+    "status", "razorpay_payment_id", "paid_at", "failure_reason", "updated_at"
+  ])
+  invoice.status = Invoice.Status.PAID
+  invoice.save(update_fields=["status", "updated_at"])
+
+  from .payout_services import create_balance_payout
+  create_balance_payout(po, invoice)
+  transaction.on_commit(lambda: events.balance_paid(po, invoice))
   return po
 
 
@@ -223,6 +257,7 @@ def _captured_on_gateway(order_id):
 
 def expire_advance(po_id): 
   open_payments = Payment.objects.filter(
+    kind=Payment.Kind.ADVANCE,
     purchase_order_id=po_id,
     status=Payment.Status.CREATED,
   ).values_list("razorpay_order_id", flat=True)
@@ -276,3 +311,93 @@ def refund_payment(payment_pk):
   Payment.objects.filter(pk=payment.pk).update(refund_id=refund["id"], updated_at=timezone.now())
   events.advance_refunded(payment.purchase_order, payment.amount)
   return refund["id"]
+
+
+def _ensure_balance_payable(invoice):
+  po = invoice.purchase_order
+  if po.status not in (PurchaseOrder.Status.RECEIVED, PurchaseOrder.Status.PARTIALLY_RECEIVED):
+    raise PaymentError(
+      "Confirm the goods receipt before paying the balance.", "GOODS_NOT_RECEIVED"
+    )
+  if invoice.status == Invoice.Status.PAID:
+    raise PaymentError("This invoice is already paid.", "INVOICE_ALREADY_PAID")
+  if invoice.balance_due <= 0:
+    raise PaymentError("Nothing is left to pay on this invoice.", "NO_BALANCE_DUE")
+
+
+@transaction.atomic
+def start_balance_payment(business, invoice_id):
+  invoice = (
+    Invoice.objects.select_for_update(of=("self",))
+    .select_related("purchase_order", "supplier_profile")
+    .filter(pk=invoice_id, business=business)
+    .first()
+  )
+  if invoice is None:
+    raise PaymentError("Invoice not found.", "INVOICE_NOT_FOUND")
+  _ensure_balance_payable(invoice)
+
+  payment = Payment.objects.filter(
+    invoice=invoice, kind=Payment.Kind.BALANCE,
+    status=Payment.Status.CREATED, amount=invoice.balance_due,
+  ).first()
+  if payment:
+    return invoice, payment
+
+  po = invoice.purchase_order
+  order = _gateway(lambda c: c.order.create({
+    "amount": to_paise(invoice.balance_due),
+    "currency": "INR",
+    "receipt": f"{invoice.number}-BAL"[:40],
+    "notes": {
+      "purpose": "invoice_balance",
+      "purchase_order_id": str(po.pk),
+      "invoice_id": str(invoice.pk),
+      "business_id": str(business.pk),
+    },
+  }))
+  payment = Payment.objects.create(
+    purchase_order=po,
+    invoice=invoice,
+    kind=Payment.Kind.BALANCE,
+    amount=invoice.balance_due,
+    razorpay_order_id=order["id"],
+  )
+  return invoice, payment
+
+
+def verify_balance_payment(business, invoice_id, order_id, payment_id, signature):
+  payments = Payment.objects.filter(
+    kind=Payment.Kind.BALANCE, invoice_id=invoice_id, invoice__business=business
+  )
+  return _verify(payments, order_id, payment_id, signature)
+
+
+
+def send_owner_refund(refund_pk):
+  with transaction.atomic():
+    refund = (
+      OwnerRefund.objects.select_for_update(of=("self",))
+      .select_related("payment", "invoice")
+      .get(pk=refund_pk)
+    )
+    if refund.status != OwnerRefund.Status.PENDING:
+      return refund
+    try:
+      result = _gateway(lambda c: c.payment.refund(refund.payment.razorpay_payment_id, {
+        "amount": to_paise(refund.amount),
+        "notes": {"reason": f"goods_receipt_{refund.source}", "invoice": refund.invoice.number},
+        "receipt": f"{str(refund.pk)[:32]}",
+      }))
+    except PaymentError as err:
+      if err.code in ("GATEWAY_ERROR", "PAYMENTS_NOT_CONFIGURED"):
+        raise 
+      refund.status = OwnerRefund.Status.FAILED
+      refund.failure_reason = err.message[:255]
+      refund.save(update_fields=["status", "failure_reason", "updated_at"])
+      return refund
+    refund.status = OwnerRefund.Status.PROCESSED
+    refund.razorpay_refund_id = result.get("id", "")
+    refund.save(update_fields=["status", "razorpay_refund_id", "updated_at"])
+  events.owner_refund_sent(refund)
+  return refund

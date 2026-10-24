@@ -56,10 +56,13 @@ from .SwaggerDocs import (
   payout_list_docs,
   supplier_payout_list_docs,
   procurement_settings_docs,
+  invoice_balance_docs,
+  invoice_balance_verify_docs,
+  supplier_debt_list_docs,
 
 )
 
-from .models import RFQ, Quotation, RFQRecipient, ReorderSuggestion, PurchaseOrder, Shipment, Invoice, Payout
+from .models import RFQ, Quotation, RFQRecipient, ReorderSuggestion, PurchaseOrder, Shipment, Invoice, Payment, Payout, SupplierDebt
 from .grn_docs import(
   grn_create_docs,
   grn_detail_docs,
@@ -94,6 +97,8 @@ from .serializers import (
   InvoiceListSerializer,
   InvoiceDetailSerializer,
   PayoutSerializer,
+  OwnerRefundSerializer,
+  SupplierDebtSerializer,
 
   GoodsReceiptCreateSerializer,
   GoodsReceiptDetailSerializer,
@@ -132,6 +137,7 @@ from rest_framework.permissions import AllowAny
 from .payment_services import (
   PaymentError, WebhookError, handle_webhook,
   start_advance_payment, to_paise, verify_advance_payment,
+  start_balance_payment, verify_balance_payment,
 )
 from .serializers import AdvanceVerifySerializer, PaymentSerializer
 
@@ -533,6 +539,10 @@ PO_ERROR_STATUS = {
   "AMOUNT_MISMATCH": 400,
   "GATEWAY_ERROR": 502,
   "PAYMENTS_NOT_CONFIGURED": 503,
+  "INVOICE_NOT_FOUND": 404,
+  "GOODS_NOT_RECEIVED": 409,
+  "INVOICE_ALREADY_PAID": 409,
+  "NO_BALANCE_DUE": 409,
   "ORDER_NOT_CANCELLABLE": 409,
   "PAYMENT_RECEIVED": 409,
   "ALREADY_DISPATCHED": 409,
@@ -586,7 +596,9 @@ class AdvancePaymentApi(APIView):
       return error_response("Purchase order not found.", "ORDER_NOT_FOUND", status=404)
     return success_response("Advance status.", {
       "order": PurchaseOrderSummarySerializer(po).data,
-      "payments": PaymentSerializer(po.payments.all(), many=True).data,
+      "payments": PaymentSerializer(
+        po.payments.filter(kind=Payment.Kind.ADVANCE), many=True
+      ).data,
     })
 
   def post(self, request, pk):
@@ -1018,3 +1030,100 @@ class ProcurementSettingsApi(APIView):
       return validation_error_response(serializer)
     serializer.save()
     return success_response("Settings updated.", serializer.data)
+
+
+def _owner_invoice(request, pk):
+  return (
+    Invoice.objects.select_related("purchase_order", "supplier_profile")
+    .filter(pk=pk, business=request.business)
+    .first()
+  )
+
+
+def _balance_status(invoice):
+  return {
+    "invoice": InvoiceSummarySerializer(invoice).data,
+    "payments": PaymentSerializer(
+      invoice.payments.filter(kind=Payment.Kind.BALANCE), many=True
+    ).data,
+    "refunds": OwnerRefundSerializer(invoice.owner_refunds.all(), many=True).data,
+  }
+
+
+@invoice_balance_docs
+class InvoiceBalanceApi(APIView):
+  permission_classes = [HasBusinessAccess, IsOwner]
+  throttle_classes = [OrderWriteThrottle]
+
+  def get(self, request, pk):
+    invoice = _owner_invoice(request, pk)
+    if invoice is None:
+      return error_response("Invoice not found.", "INVOICE_NOT_FOUND", status=404)
+    return success_response("Balance status.", _balance_status(invoice))
+
+  def post(self, request, pk):
+    try:
+      invoice, payment = start_balance_payment(request.business, pk)
+    except PaymentError as err:
+      return po_error_response(err)
+
+    user = request.user
+    profile_name = getattr(getattr(user, "profile", None), "name", "") or ""
+    po = invoice.purchase_order
+    return success_response("Checkout ready.", {
+      "key": settings.RAZORPAY_KEY_ID,
+      "order_id": payment.razorpay_order_id,
+      "amount": to_paise(payment.amount),
+      "currency": "INR",
+      "name": "Kosh",
+      "description": f"Balance for {invoice.number} ({po.number}) - {invoice.supplier_profile.company_name}",
+      "prefill": {"name": profile_name, "email": user.email},
+      "notes": {"invoice_id": str(invoice.pk), "purchase_order_id": str(po.pk)},
+      "invoice_id": str(invoice.pk),
+      "purchase_order_id": str(po.pk),
+    })
+
+
+@invoice_balance_verify_docs
+class InvoiceBalanceVerifyApi(APIView):
+  permission_classes = [HasBusinessAccess, IsOwner]
+  throttle_classes = [OrderWriteThrottle]
+
+  def post(self, request, pk):
+    serializer = AdvanceVerifySerializer(data=request.data)
+    if not serializer.is_valid():
+      return validation_error_response(serializer)
+    data = serializer.validated_data
+    try:
+      verify_balance_payment(
+        request.business, pk,
+        data["razorpay_order_id"], data["razorpay_payment_id"], data["razorpay_signature"],
+      )
+    except PaymentError as err:
+      return po_error_response(err)
+
+    invoice = _owner_invoice(request, pk)
+    paid = invoice.payments.filter(
+      kind=Payment.Kind.BALANCE, status=Payment.Status.PAID,
+      razorpay_order_id=data["razorpay_order_id"],
+    ).exists()
+    if paid:
+      message = "Balance paid. It is being sent to the supplier."
+    else:
+      message = "Payment received, but this invoice was already settled. It will be refunded."
+    return success_response(message, _balance_status(invoice))
+
+
+@supplier_debt_list_docs
+class SupplierDebtListApi(APIView):
+  permission_classes = [IsAuthenticated, IsSupplier]
+
+  def get(self, request):
+    qs = SupplierDebt.objects.filter(supplier_profile=request.supplier).select_related(
+      "purchase_order", "invoice"
+    ).order_by("-created_at")
+    status_param = request.query_params.get("status")
+    if status_param in SupplierDebt.Status.values:
+      qs = qs.filter(status=status_param)
+    return paginated_response(request, qs, SupplierDebtSerializer, "Debts fetched.")
+

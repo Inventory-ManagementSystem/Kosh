@@ -1,5 +1,7 @@
 from django.urls import path
 from . import views
+from . import pdf_views
+from . import quotation_status_views
 
 urlpatterns = [
   path("rfqs/", views.RFQListApi.as_view(), name="rfq-list"),
@@ -34,11 +36,26 @@ urlpatterns = [
   path("payouts/", views.PayoutListApi.as_view(), name="payout-list"),
   path("supplier/payouts/", views.SupplierPayoutListApi.as_view(), name="supplier-payout-list"),
   path("payouts/razorpayx/webhook/", views.RazorpayXWebhookApi.as_view(), name="razorpayx-webhook"),
+  path("invoices/<uuid:pk>/balance/", views.InvoiceBalanceApi.as_view(), name="invoice-balance"),
+  path("invoices/<uuid:pk>/balance/verify/", views.InvoiceBalanceVerifyApi.as_view(), name="invoice-balance-verify"),
+  path("supplier/debts/", views.SupplierDebtListApi.as_view(), name="supplier-debt-list"),
   path("orders/<uuid:pk>/receive/", views.GoodsReceiptCreateApi.as_view(), name="grn-create"),
   path("goods-receipts/", views.GoodsReceiptListApi.as_view(), name="grn-list"),
   path("goods-receipts/<uuid:pk>/", views.GoodsReceiptDetailApi.as_view(), name="grn-detail"),
   path("supplier/goods-receipts/", views.SupplierGoodsReceiptListApi.as_view(), name="supplier-grn-list"),
   path("supplier/goods-receipts/<uuid:pk>/", views.SupplierGoodsReceiptDetailApi.as_view(), name="supplier-grn-detail"),
   path("settings/", views.ProcurementSettingsApi.as_view(), name="procurement-settings"),
+  path("rfqs/<uuid:pk>/pdf/", pdf_views.RFQPdfApi.as_view(), name="rfq-pdf"),
+  path("quotations/<uuid:pk>/pdf/", pdf_views.QuotationPdfApi.as_view(), name="quotation-pdf"),
+  path("supplier/rfqs/<uuid:pk>/pdf/", pdf_views.SupplierRFQPdfApi.as_view(), name="supplier-rfq-pdf"),
+  path("supplier/rfqs/<uuid:pk>/quotation/pdf/", pdf_views.SupplierQuotationPdfApi.as_view(), name="supplier-quotation-pdf",),
+  path("invoices/<uuid:pk>/pdf/", pdf_views.InvoicePdfApi.as_view(), name="invoice-pdf"),
+  path("supplier/invoices/<uuid:pk>/pdf/", pdf_views.SupplierInvoicePdfApi.as_view(), name="supplier-invoice-pdf"),
+  path("orders/<uuid:pk>/pdf/", pdf_views.PurchaseOrderPdfApi.as_view(), name="order-pdf"),
+  path("supplier/orders/<uuid:pk>/pdf/", pdf_views.SupplierPurchaseOrderPdfApi.as_view(), name="supplier-order-pdf"),
+  path("goods-receipts/<uuid:pk>/pdf/", pdf_views.GoodsReceiptPdfApi.as_view(), name="grn-pdf"),
+  path("supplier/goods-receipts/<uuid:pk>/pdf/", pdf_views.SupplierGoodsReceiptPdfApi.as_view(), name="supplier-grn-pdf"),
+  path("rfqs/<uuid:pk>/quotations/pdf/", pdf_views.RFQComparisonPdfApi.as_view(), name="rfq-comparison-pdf"),
+  path("supplier/quotations/", quotation_status_views.SupplierQuotationStatusListApi.as_view(), name="supplier-quotation-list"),
   
 ]
