@@ -2,7 +2,7 @@ from django.contrib.auth.models import User
 from rest_framework import serializers
 from django.contrib.auth import authenticate
 from rest_framework_simplejwt.tokens import RefreshToken
-from .models import Business
+from .models import Business, Profile
 import re
 from .validators import validate_phone_number
 
@@ -182,3 +182,6 @@ class InviteEmployeeSerializer(serializers.Serializer):
   def validate_phone(self, value):
     cleaned = re.sub(r"[\s-]", "", value)
     return validate_phone_number(cleaned)
+
+class SelectRoleSerializer(serializers.Serializer):
+  selected_role = serializers.ChoiceField(choices=Profile.SELECTED_ROLE_CHOICES)

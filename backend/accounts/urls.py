@@ -26,5 +26,5 @@ urlpatterns = [
   path("invites/mine/", views.MyInvitesApi.as_view(), name="my-invites"),
   path("invites/<int:invite_id>/accept/", views.AcceptInviteApi.as_view(), name="invite-accept"),
   path("invites/<int:invite_id>/decline/", views.DeclineInviteApi.as_view(), name="invite-decline"),
-  
+  path("select-role/", views.SelectRoleApi.as_view(), name="select-role"),
 ]

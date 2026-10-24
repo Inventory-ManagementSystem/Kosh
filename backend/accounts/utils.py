@@ -39,3 +39,30 @@ def purge_expired_invites(business):
     EmployeeInvite.objects.filter(
         business=business, created_at__lt=invite_cutoff()
     ).delete()
+
+def get_onboarding_state(user):
+    role = get_role(user)
+    selected_role = getattr(getattr(user, "profile", None), "selected_role", None)
+
+    if role == "owner":
+        next_step = "owner_dashboard"
+    elif role == "employee":
+        next_step = "employee_dashboard"
+    elif role == "supplier":
+        next_step = "supplier_dashboard"
+    elif selected_role == "owner":
+        next_step = "setup_business"
+    elif selected_role == "employee":
+        next_step = "employee_invites"
+    elif selected_role == "supplier":
+        next_step = "setup_supplier"
+    else:
+        next_step = "select_role"
+
+    return {
+        "role": role,
+        "selected_role": selected_role,
+        "has_business": role == "owner",
+        "next_step": next_step,
+        "can_change_role": role is None,
+    }

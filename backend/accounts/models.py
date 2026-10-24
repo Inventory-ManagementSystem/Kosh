@@ -21,16 +21,17 @@ class Business(models.Model):
 from django.contrib.auth.models import User
 
 class Profile(models.Model):
-    user=models.OneToOneField(
-        User,
-        on_delete=models.CASCADE,
-        related_name="profile"
+    SELECTED_ROLE_CHOICES = [
+        ("owner", "Owner"),
+        ("employee", "Employee"),
+        ("supplier", "Supplier"),
+    ]
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="profile")
+    name = models.CharField(max_length=50, null=True, blank=True)
+    token_version = models.PositiveIntegerField(default=1)
+    selected_role = models.CharField(
+        max_length=20, choices=SELECTED_ROLE_CHOICES, null=True, blank=True
     )
-    name = models.CharField(max_length=50,null=True,blank=True)
-    token_version=models.PositiveIntegerField(default=1)
-
-    def __str__(self):
-        return self.user.username
 
 class Employee(models.Model):
     ROLE_CHOICES = [("employee", "Employee")]
