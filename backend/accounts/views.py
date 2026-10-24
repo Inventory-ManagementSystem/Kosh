@@ -4,7 +4,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from .models import Business, Profile, Employee, EmployeeInvite
 from suppliers.models import SupplierProfile
-from .utils import get_role, get_owned_business, invite_cutoff, purge_expired_invites, INVITE_TTL
+from .utils import get_role, get_owned_business, invite_cutoff, purge_expired_invites, INVITE_TTL, get_onboarding_state
 from .serializers import (
   RegisterSerializer,
   LoginSerializer,
@@ -16,6 +16,7 @@ from .serializers import (
   VerifyRegistrationOTPSerializer,
   ResendRegistrationOTPSerializer,
   InviteEmployeeSerializer,
+  SelectRoleSerializer
 
 )
 from rest_framework.permissions import IsAuthenticated
@@ -415,9 +416,7 @@ class LoginApi(APIView):
       has_business = Business.objects.filter(owner=user).exists()
       response = success_response(
                     "Login successful.",
-                    data={"access": data["access"], 
-                        "has_business": has_business,
-                        "role": get_role(user)},
+                    data={"access": data["access"], **get_onboarding_state(user)},
                 )
       set_refresh_cookie(response, data["refresh"])
       return response
@@ -449,11 +448,11 @@ class ProfileApi(APIView):
   def get(self,request):
     user =request.user
     return success_response("Profile retrieved.", data={
-        "id": user.id,
-        "name": user.profile.name,
-        "email": user.email,
-        "role": get_role(user),
-    })
+    "id": user.id,
+    "name": user.profile.name,
+    "email": user.email,
+    **get_onboarding_state(user),
+})
 
 
 
@@ -912,11 +911,7 @@ class GoogleJWTApi(APIView):
 
     response = success_response(
         "Login successful.",
-        data={
-            "access": str(refresh.access_token),
-            "has_business": has_business,
-            "role": get_role(user)
-        },
+        data={"access": str(refresh.access_token), **get_onboarding_state(user)},
     )
     set_refresh_cookie(response, refresh)
     django_logout(request._request)
@@ -960,11 +955,7 @@ class GitHubJWTApi(APIView):
 
         response = success_response(
             "Login successful.",
-            data={
-                "access": str(refresh.access_token),
-                "has_business": has_business,
-                "role": get_role(user)
-            },
+            data={"access": str(refresh.access_token), **get_onboarding_state(user)},
         )
         set_refresh_cookie(response, refresh)
         django_logout(request._request)
@@ -1515,3 +1506,47 @@ class DeclineInviteApi(APIView):
         invite.delete()
         events.invite_declined(business, request.user)
         return success_response("Invite declined.")
+
+@extend_schema(
+    summary="Select Role",
+    description=(
+        "Saves the role picked on the role screen so it survives logout. Can be changed "
+        "until the user registers a business, accepts an invite or registers as a supplier."
+    ),
+    request=SelectRoleSerializer,
+    responses={
+        200: resp("Role saved.",
+                  ok_example("Role Saved", "Role saved.",
+                             data={"role": None, "selected_role": "employee",
+                                   "has_business": False, "next_step": "employee_invites",
+                                   "can_change_role": True})),
+        401: UNAUTHORIZED_RESPONSE,
+        409: resp("The user already has a role.",
+                  err_example("Role Locked",
+                              "Your role can't be changed after joining or creating a business.",
+                              "ROLE_LOCKED")),
+    },
+)
+class SelectRoleApi(APIView):
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [UserRateThrottle]
+
+    def post(self, request):
+        serializer = SelectRoleSerializer(data=request.data)
+        if not serializer.is_valid():
+            return error_response(
+                "Validation failed.", "VALIDATION_ERROR", errors=serializer.errors,
+            )
+
+        if get_role(request.user) is not None:
+            return error_response(
+                "Your role can't be changed after joining or creating a business.",
+                "ROLE_LOCKED",
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        profile = request.user.profile
+        profile.selected_role = serializer.validated_data["selected_role"]
+        profile.save(update_fields=["selected_role"])
+
+        return success_response("Role saved.", data=get_onboarding_state(request.user))
