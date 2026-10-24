@@ -1,6 +1,7 @@
 import inspect
 import json
 from datetime import timedelta
+from decimal import Decimal
 
 from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist
 from django.core.serializers.json import DjangoJSONEncoder
@@ -18,10 +19,13 @@ from procurement.models import (
   GoodsReceipt,
   GoodsReceiptDiscrepancy,
   Invoice,
+  OwnerRefund,
   Payment,
+  Payout,
   PurchaseOrder,
   Quotation,
   ReorderSuggestion,
+  SupplierDebt,
 )
 from suppliers.models import Supplier
 from .knowledge import get_app_help
@@ -218,6 +222,42 @@ def get_business_insights(business, days=30):
         business=business, status=Invoice.Status.UNPAID
       ).aggregate(total=_money_sum(F("balance_due")))["total"],
     },
+    "supplier_payments": _supplier_payment_summary(business),
+  }
+
+
+RECEIVED_STATUSES = (PurchaseOrder.Status.RECEIVED, PurchaseOrder.Status.PARTIALLY_RECEIVED)
+
+
+def _payouts_needing_attention(business):
+  payouts = Payout.objects.filter(purchase_order__business=business)
+  active = set(
+    payouts.filter(status__in=Payout.ACTIVE).values_list("purchase_order_id", "kind")
+  )
+  failed = {
+    (po_id, kind)
+    for po_id, kind in payouts.filter(status=Payout.Status.FAILED)
+    .values_list("purchase_order_id", "kind")
+    if (po_id, kind) not in active
+  }
+  return payouts.filter(status=Payout.Status.ON_HOLD).count(), len(failed)
+
+
+def _supplier_payment_summary(business):
+  unpaid = Invoice.objects.filter(business=business, status=Invoice.Status.UNPAID)
+  ready = unpaid.filter(purchase_order__status__in=RECEIVED_STATUSES, balance_due__gt=0)
+  on_hold, failed = _payouts_needing_attention(business)
+  return {
+    "invoices_ready_to_pay": ready.count(),
+    "balance_ready_to_pay": ready.aggregate(total=_money_sum(F("balance_due")))["total"],
+    "invoices_waiting_for_goods_receipt": unpaid.filter(
+      purchase_order__status=PurchaseOrder.Status.DISPATCHED
+    ).count(),
+    "payouts_on_hold_for_supplier_bank_details": on_hold,
+    "payouts_failed": failed,
+    "refunds_to_owner_pending": OwnerRefund.objects.filter(
+      invoice__business=business, status=OwnerRefund.Status.PENDING
+    ).count(),
   }
 
 
@@ -494,7 +534,7 @@ def _related(obj, name):
 def _advance_state(po):
   if po.advance_amount <= 0:
     return "no advance needed"
-  statuses = {p.status for p in po.payments.all()}
+  statuses = {p.status for p in po.payments.all() if p.kind == Payment.Kind.ADVANCE}
   if Payment.Status.PAID.value in statuses:
     return "advance paid"
   if Payment.Status.REFUNDED.value in statuses:
@@ -513,10 +553,125 @@ NEXT_STEP = {
   PurchaseOrder.Status.DISPATCHED.value: (
     "Goods are on the way. When they arrive, record a goods receipt for this order."
   ),
-  PurchaseOrder.Status.PARTIALLY_RECEIVED.value: "Some goods have been received.",
-  PurchaseOrder.Status.RECEIVED.value: "Completed: goods received and the invoice settled.",
   PurchaseOrder.Status.CANCELLED.value: "Cancelled.",
 }
+
+
+def _invoice_next_step(invoice, po=None):
+  po = po or invoice.purchase_order
+  if po.status not in RECEIVED_STATUSES:
+    return (
+      "Goods not received yet. Record the goods receipt when the delivery arrives. "
+      "The balance can only be paid after that, and it is reduced for any missing "
+      "or rejected units."
+    )
+  if invoice.status == Invoice.Status.PAID:
+    step = "Settled: nothing is left to pay on this invoice."
+    if invoice.refund_due > 0:
+      step += (
+        " The advance was more than the accepted goods were worth, so the extra "
+        "comes back to the owner (see refunds_to_owner)."
+      )
+    return step
+  if invoice.balance_due > 0:
+    return (
+      "Goods received. The owner can now pay the balance online through Razorpay; "
+      "Kosh then sends it to the supplier automatically."
+    )
+  return "Goods received; nothing is left to pay."
+
+
+def _next_step(po, invoice=None):
+  if po.status in RECEIVED_STATUSES:
+    if invoice is None:
+      return "Goods received."
+    return _invoice_next_step(invoice, po)
+  return NEXT_STEP.get(po.status, "")
+
+
+def _payout_row(p):
+  return {
+    "purchase_order": p.purchase_order.number,
+    "invoice": p.invoice.number,
+    "supplier": p.supplier_profile.company_name,
+    "kind": p.get_kind_display(),
+    "status": p.get_status_display(),
+    "gross_amount": p.gross_amount,
+    "deducted_amount": p.deducted_amount,
+    "amount": p.amount,
+    "mode": p.mode or None,
+    "utr": p.utr or None,
+    "failure_reason": p.failure_reason or None,
+    "sent_at": p.sent_at,
+    "processed_at": p.processed_at,
+  }
+
+
+PAYOUT_MEANING = {
+  Payout.Status.ON_HOLD.value: "Waiting for the supplier to add bank or UPI payout details.",
+  Payout.Status.PENDING.value: "Queued to be sent.",
+  Payout.Status.PROCESSING.value: "Sent to the bank, waiting for confirmation.",
+  Payout.Status.PROCESSED.value: "Money reached the supplier.",
+  Payout.Status.FAILED.value: (
+    "Failed. The supplier must check and save their payout details again to retry."
+  ),
+}
+
+
+def _payout_meaning(p):
+  if p.status == Payout.Status.PROCESSED and p.amount <= 0:
+    return "Nothing was sent: the whole amount went to repay an earlier overpayment."
+  meaning = PAYOUT_MEANING.get(p.status, "")
+  if p.deducted_amount > 0:
+    meaning += " Part of it was held back to repay an earlier overpayment."
+  return meaning
+
+
+def _money_trail(invoice):
+  payouts = invoice.payouts.select_related(
+    "purchase_order", "invoice", "supplier_profile"
+  ).order_by("created_at")
+  return {
+    "balance_payments": [
+      {
+        "status": p.get_status_display(),
+        "amount": p.amount,
+        "paid_at": p.paid_at,
+        "failure_reason": p.failure_reason or None,
+      }
+      for p in invoice.payments.filter(kind=Payment.Kind.BALANCE).order_by("created_at")
+    ],
+    "supplier_payouts": [
+      {**_payout_row(p), "meaning": _payout_meaning(p)} for p in payouts
+    ],
+    "refunds_to_owner": [
+      {
+        "amount": r.amount,
+        "status": r.get_status_display(),
+        "reason": (
+          "Advance held by Kosh, refunded directly"
+          if r.source == OwnerRefund.Source.HELD
+          else "Recovered from the supplier's later payout"
+        ),
+        "failure_reason": r.failure_reason or None,
+        "created_at": r.created_at,
+      }
+      for r in invoice.owner_refunds.order_by("created_at")
+    ],
+    "supplier_debts": [
+      {
+        "amount": d.amount,
+        "recovered_amount": d.recovered_amount,
+        "outstanding": d.outstanding,
+        "status": d.get_status_display(),
+        "meaning": (
+          "The supplier received more advance than the accepted goods were worth; "
+          "Kosh holds this back from their next payouts and refunds it to the owner."
+        ),
+      }
+      for d in invoice.supplier_debts.order_by("created_at")
+    ],
+  }
 
 
 def _order_queryset(business):
@@ -607,10 +762,11 @@ def get_purchase_order(business, po_number):
 
   return {
     **_order_row(po),
-    "next_step": NEXT_STEP.get(po.status, ""),
+    "next_step": _next_step(po, invoice),
     "items": items,
     "payments": [
       {
+        "kind": p.get_kind_display(),
         "status": p.get_status_display(),
         "amount": p.amount,
         "paid_at": p.paid_at,
@@ -645,19 +801,72 @@ def get_purchase_order(business, po_number):
       "balance_due": invoice.balance_due,
       "refund_due": invoice.refund_due,
     } if invoice else None,
+    "supplier_payouts": [
+      {**_payout_row(p), "meaning": _payout_meaning(p)}
+      for p in po.payouts.select_related("purchase_order", "invoice", "supplier_profile")
+      .order_by("created_at")
+    ],
   }
 
 
-def list_invoices(business, status=None, supplier=None, limit=10):
-  invoices = (
+INVOICE_STAGES = {
+  "awaiting_goods_receipt": Q(
+    status=Invoice.Status.UNPAID, purchase_order__status=PurchaseOrder.Status.DISPATCHED
+  ),
+  "ready_to_pay": Q(
+    status=Invoice.Status.UNPAID,
+    purchase_order__status__in=RECEIVED_STATUSES,
+    balance_due__gt=0,
+  ),
+  "paid": Q(status=Invoice.Status.PAID),
+}
+
+
+def _invoice_stage(inv):
+  if inv.status == Invoice.Status.PAID:
+    return "paid"
+  if inv.purchase_order.status in RECEIVED_STATUSES:
+    return "ready_to_pay" if inv.balance_due > 0 else "settled"
+  return "awaiting_goods_receipt"
+
+
+def _invoice_queryset(business):
+  return (
     Invoice.objects.filter(business=business)
-    .select_related("supplier_profile", "purchase_order")
+    .select_related("supplier_profile", "purchase_order__goods_receipt")
+    .order_by("-created_at")
   )
+
+
+def _invoice_row(inv):
+  receipt = _related(inv.purchase_order, "goods_receipt")
+  return {
+    "number": inv.number,
+    "purchase_order": inv.purchase_order.number,
+    "supplier": inv.supplier_profile.company_name,
+    "status": inv.get_status_display(),
+    "stage": _invoice_stage(inv),
+    "issue_date": inv.issue_date,
+    "goods_receipt": receipt.number if receipt else None,
+    "grand_total": inv.grand_total,
+    "advance_applied": inv.advance_applied,
+    "discrepancy_credit": inv.discrepancy_credit,
+    "balance_due": inv.balance_due,
+    "refund_due": inv.refund_due,
+  }
+
+
+def list_invoices(business, status=None, stage=None, supplier=None, limit=10):
+  invoices = _invoice_queryset(business)
   if status:
     valid = {choice.value for choice in Invoice.Status}
     if status not in valid:
       raise ToolError(f"status must be one of: {', '.join(sorted(valid))}.")
     invoices = invoices.filter(status=status)
+  if stage:
+    if stage not in INVOICE_STAGES:
+      raise ToolError(f"stage must be one of: {', '.join(INVOICE_STAGES)}.")
+    invoices = invoices.filter(INVOICE_STAGES[stage])
   if supplier:
     invoices = invoices.filter(supplier_profile__company_name__icontains=supplier)
 
@@ -665,22 +874,287 @@ def list_invoices(business, status=None, supplier=None, limit=10):
     balance_due_total=_money_sum(F("balance_due")),
     refund_due_total=_money_sum(F("refund_due")),
   )
+  ready = _invoice_queryset(business).filter(INVOICE_STAGES["ready_to_pay"])
+  rows = [_invoice_row(inv) for inv in invoices[:_limit(limit, 10)]]
+  return {
+    "total": invoices.count(),
+    **totals,
+    "ready_to_pay_count": ready.count(),
+    "ready_to_pay_total": ready.aggregate(total=_money_sum(F("balance_due")))["total"],
+    "stage_meaning": {
+      "awaiting_goods_receipt": "Supplier dispatched; goods receipt not recorded yet.",
+      "ready_to_pay": "Goods received; the owner can pay the balance.",
+      "paid": "Nothing left to pay.",
+    },
+    "note": "Invoice numbers restart for each supplier, so INV-0001 can exist for several suppliers.",
+    "showing": len(rows),
+    "invoices": rows,
+  }
+
+
+def _find_invoice(business, invoice_number, supplier=None):
+  ref = (invoice_number or "").strip()
+  if not ref:
+    raise ToolError("Give an invoice number (e.g. INV-0001) or the purchase order number.")
+  invoices = _invoice_queryset(business)
+  if ref.upper().startswith("PO-"):
+    matches = list(invoices.filter(purchase_order__number__iexact=ref)[:1])
+    if not matches:
+      raise ToolError(
+        f"No invoice for purchase order '{ref}'. The supplier may not have dispatched it yet."
+      )
+    return matches[0]
+
+  invoices = invoices.filter(number__iexact=ref)
+  if supplier:
+    invoices = invoices.filter(supplier_profile__company_name__icontains=supplier)
+  matches = list(invoices[:6])
+  if len(matches) == 1:
+    return matches[0]
+  if not matches:
+    raise ToolError(f"No invoice found with number '{ref}'. Use list_invoices.")
+  options = ", ".join(
+    f"{m.number} from {m.supplier_profile.company_name} ({m.purchase_order.number})"
+    for m in matches[:5]
+  )
+  raise ToolError(
+    f"Several suppliers have an invoice numbered '{ref}': {options}. "
+    "Ask which supplier, or use the purchase order number."
+  )
+
+
+def get_invoice(business, invoice_number, supplier=None):
+  inv = _find_invoice(business, invoice_number, supplier)
+  po = inv.purchase_order
+  receipt = _related(po, "goods_receipt")
+  return {
+    **_invoice_row(inv),
+    "purchase_order_status": po.get_status_display(),
+    "subtotal": inv.subtotal,
+    "tax_total": inv.tax_total,
+    "advance_amount_on_order": po.advance_amount,
+    "how_balance_is_worked_out": (
+      "balance_due = grand_total - discrepancy_credit - advance_applied. "
+      "discrepancy_credit is added at the goods receipt for units that were missing "
+      "or rejected. refund_due is advance paid beyond what is payable."
+    ),
+    "next_step": _invoice_next_step(inv, po),
+    "goods_receipt_date": receipt.created_at if receipt else None,
+    "items": [
+      {
+        "product": i.product_name,
+        "sku": i.sku,
+        "quantity_invoiced": i.quantity,
+        "unit_price": i.unit_price,
+        "gst_rate": i.gst_rate,
+        "line_total": i.line_total,
+      }
+      for i in inv.items.all()
+    ],
+    **_money_trail(inv),
+  }
+
+
+def _grn_queryset(business):
+  return (
+    GoodsReceipt.objects.filter(business=business)
+    .select_related(
+      "purchase_order__supplier_profile", "purchase_order__invoice", "received_by__profile"
+    )
+    .order_by("-created_at")
+  )
+
+
+def _user_name(user):
+  if user is None:
+    return None
+  profile = getattr(user, "profile", None)
+  return getattr(profile, "name", None) or user.get_full_name() or user.email
+
+
+def list_goods_receipts(business, days=None, supplier=None, with_issues_only=False, limit=10):
+  receipts = _grn_queryset(business)
+  period = None
+  if days:
+    period = _days(days)
+    receipts = receipts.filter(created_at__gte=timezone.now() - timedelta(days=period))
+  if supplier:
+    receipts = receipts.filter(
+      purchase_order__supplier_profile__company_name__icontains=supplier
+    )
+  if with_issues_only:
+    receipts = receipts.filter(discrepancies__isnull=False).distinct()
+  receipts = receipts.prefetch_related("items", "discrepancies")
+
+  awaiting = PurchaseOrder.objects.filter(
+    business=business, status=PurchaseOrder.Status.DISPATCHED
+  ).select_related("supplier_profile", "shipment")
+
+  rows = []
+  for grn in receipts[:_limit(limit, 10)]:
+    po = grn.purchase_order
+    invoice = _related(po, "invoice")
+    items = list(grn.items.all())
+    received = sum(i.received_quantity for i in items)
+    rejected = sum(i.rejected_quantity for i in items)
+    rows.append({
+      "number": grn.number,
+      "purchase_order": po.number,
+      "supplier": po.supplier_profile.company_name,
+      "received_at": grn.created_at,
+      "received_by": _user_name(grn.received_by),
+      "units_received": received,
+      "units_rejected": rejected,
+      "units_accepted_into_stock": received - rejected,
+      "issues": len(grn.discrepancies.all()),
+      "credit_total": sum((i.credit_amount for i in items), Decimal("0")),
+      "invoice_number": invoice.number if invoice else None,
+      "invoice_status": invoice.get_status_display() if invoice else None,
+    })
+  return {
+    "period_days": period,
+    "total": receipts.count(),
+    "showing": len(rows),
+    "goods_receipts": rows,
+    "dispatched_orders_waiting_for_goods_receipt": [
+      {
+        "purchase_order": po.number,
+        "supplier": po.supplier_profile.company_name,
+        "expected_delivery_date": (
+          po.shipment.expected_delivery_date if _related(po, "shipment") else None
+        ),
+      }
+      for po in awaiting[:10]
+    ],
+  }
+
+
+def get_goods_receipt(business, grn_number):
+  ref = (grn_number or "").strip()
+  if not ref:
+    raise ToolError("Give a goods receipt number (e.g. GRN-0001) or the purchase order number.")
+  receipts = _grn_queryset(business)
+  if ref.upper().startswith("PO-"):
+    grn = receipts.filter(purchase_order__number__iexact=ref).first()
+    if grn is None:
+      raise ToolError(f"No goods receipt has been recorded for '{ref}' yet.")
+  else:
+    grn = receipts.filter(number__iexact=ref).first()
+    if grn is None:
+      raise ToolError(f"No goods receipt found with number '{ref}'. Use list_goods_receipts.")
+
+  po = grn.purchase_order
+  invoice = _related(po, "invoice")
+  items = grn.items.select_related("purchase_order_item").prefetch_related("discrepancies")
+  return {
+    "number": grn.number,
+    "purchase_order": po.number,
+    "purchase_order_status": po.get_status_display(),
+    "supplier": po.supplier_profile.company_name,
+    "received_at": grn.created_at,
+    "received_by": _user_name(grn.received_by),
+    "notes": grn.notes or None,
+    "items": [
+      {
+        "product": i.purchase_order_item.product_name,
+        "sku": i.purchase_order_item.sku,
+        "ordered": i.ordered_quantity,
+        "dispatched": i.dispatched_quantity,
+        "received": i.received_quantity,
+        "rejected": i.rejected_quantity,
+        "accepted_into_stock": i.accepted_quantity,
+        "credit_amount": i.credit_amount,
+        "note": i.note or None,
+        "issues": [
+          {"issue": d.get_kind_display(), "quantity": d.quantity}
+          for d in i.discrepancies.all()
+        ],
+      }
+      for i in items
+    ],
+    "stock_note": "Only accepted units (received minus rejected) were added to stock.",
+    "invoice": {
+      "number": invoice.number,
+      "status": invoice.get_status_display(),
+      "grand_total": invoice.grand_total,
+      "discrepancy_credit": invoice.discrepancy_credit,
+      "advance_applied": invoice.advance_applied,
+      "balance_due": invoice.balance_due,
+      "refund_due": invoice.refund_due,
+      "next_step": _invoice_next_step(invoice, po),
+    } if invoice else None,
+  }
+
+
+def list_supplier_payouts(business, status=None, supplier=None, limit=15):
+  payouts = (
+    Payout.objects.filter(purchase_order__business=business)
+    .select_related("purchase_order", "invoice", "supplier_profile")
+    .order_by("-created_at")
+  )
+  if status:
+    valid = {choice.value for choice in Payout.Status}
+    if status not in valid:
+      raise ToolError(f"status must be one of: {', '.join(sorted(valid))}.")
+    payouts = payouts.filter(status=status)
+  if supplier:
+    payouts = payouts.filter(supplier_profile__company_name__icontains=supplier)
+
+  by_status = {
+    row["status"]: {"count": row["count"], "amount": row["amount"]}
+    for row in payouts.order_by().values("status").annotate(
+      count=Count("id"), amount=_money_sum(F("amount"))
+    )
+  }
+  debts = SupplierDebt.objects.filter(
+    purchase_order__business=business, status=SupplierDebt.Status.OPEN
+  ).select_related("supplier_profile", "purchase_order")
+  refunds = OwnerRefund.objects.filter(
+    invoice__business=business
+  ).select_related("invoice").order_by("-created_at")
+  if supplier:
+    debts = debts.filter(supplier_profile__company_name__icontains=supplier)
+    refunds = refunds.filter(invoice__supplier_profile__company_name__icontains=supplier)
+
   rows = [
-    {
-      "number": inv.number,
-      "purchase_order": inv.purchase_order.number,
-      "supplier": inv.supplier_profile.company_name,
-      "status": inv.get_status_display(),
-      "issue_date": inv.issue_date,
-      "grand_total": inv.grand_total,
-      "advance_applied": inv.advance_applied,
-      "discrepancy_credit": inv.discrepancy_credit,
-      "balance_due": inv.balance_due,
-      "refund_due": inv.refund_due,
-    }
-    for inv in invoices[:_limit(limit, 10)]
+    {**_payout_row(p), "meaning": _payout_meaning(p)}
+    for p in payouts[:_limit(limit, 15)]
   ]
-  return {"total": invoices.count(), **totals, "showing": len(rows), "invoices": rows}
+  return {
+    "how_it_works": (
+      "Kosh pays suppliers automatically through RazorpayX: the advance when the "
+      "supplier dispatches, the balance after the owner pays it. deducted_amount was "
+      "held back to recover an earlier overpayment; amount is what was actually sent."
+    ),
+    "total": payouts.count(),
+    "by_status": by_status,
+    "showing": len(rows),
+    "payouts": rows,
+    "open_supplier_debts": [
+      {
+        "supplier": d.supplier_profile.company_name,
+        "purchase_order": d.purchase_order.number,
+        "amount": d.amount,
+        "recovered_amount": d.recovered_amount,
+        "outstanding": d.outstanding,
+      }
+      for d in debts[:10]
+    ],
+    "refunds_to_owner": [
+      {
+        "invoice": r.invoice.number,
+        "amount": r.amount,
+        "status": r.get_status_display(),
+        "reason": (
+          "Advance held by Kosh, refunded directly"
+          if r.source == OwnerRefund.Source.HELD
+          else "Recovered from the supplier's later payout"
+        ),
+        "created_at": r.created_at,
+      }
+      for r in refunds[:10]
+    ],
+  }
 
 
 def get_receiving_issues(business, days=30, supplier=None, limit=15):
@@ -806,6 +1280,10 @@ TOOL_FUNCTIONS = {
   "list_purchase_orders": list_purchase_orders,
   "get_purchase_order": get_purchase_order,
   "list_invoices": list_invoices,
+  "get_invoice": get_invoice,
+  "list_goods_receipts": list_goods_receipts,
+  "get_goods_receipt": get_goods_receipt,
+  "list_supplier_payouts": list_supplier_payouts,
   "get_receiving_issues": get_receiving_issues,
   "list_employees": list_employees,
 }
@@ -1000,13 +1478,100 @@ TOOL_DECLARATIONS = [
   {
     "name": "list_invoices",
     "description": (
-      "Supplier invoices with balance due, advance applied, discrepancy credit and refund "
-      "due, plus totals. Use for 'how much do I owe suppliers'."
+      "Supplier invoices (created automatically when a supplier dispatches) with stage, "
+      "goods receipt number, balance due, advance applied, discrepancy credit and refund "
+      "due, plus totals and how much is ready to pay now. Use for 'how much do I owe "
+      "suppliers', 'which invoices can I pay', 'which invoices are waiting for delivery'."
     ),
     "parameters": {
       "type": "OBJECT",
       "properties": {
         "status": {"type": "STRING", "enum": ["unpaid", "paid"]},
+        "stage": {
+          "type": "STRING",
+          "enum": ["awaiting_goods_receipt", "ready_to_pay", "paid"],
+          "description": (
+            "awaiting_goods_receipt = dispatched but not received yet; "
+            "ready_to_pay = received, balance can be paid now."
+          ),
+        },
+        "supplier": {"type": "STRING", "description": "Supplier company name (partial match)."},
+        "limit": _LIMIT,
+      },
+    },
+  },
+  {
+    "name": "get_invoice",
+    "description": (
+      "Everything about ONE supplier invoice: items, totals, how the balance was worked "
+      "out, the next step, balance payments, payouts sent to the supplier, refunds to the "
+      "owner and any amount the supplier owes back. Invoice numbers restart per supplier, "
+      "so pass supplier when known, or pass the PO number (e.g. PO-0003) instead."
+    ),
+    "parameters": {
+      "type": "OBJECT",
+      "properties": {
+        "invoice_number": {
+          "type": "STRING", "description": "e.g. INV-0002, or the order number PO-0003.",
+        },
+        "supplier": {"type": "STRING", "description": "Supplier company name (partial match)."},
+      },
+      "required": ["invoice_number"],
+    },
+  },
+  {
+    "name": "list_goods_receipts",
+    "description": (
+      "Goods receipts (GRN-0001, ...) recorded when deliveries arrived: order, supplier, "
+      "who received it, units received / rejected / accepted into stock, issue count and "
+      "the invoice. Also lists dispatched orders still waiting for a goods receipt."
+    ),
+    "parameters": {
+      "type": "OBJECT",
+      "properties": {
+        "days": {
+          "type": "INTEGER",
+          "description": "Only receipts from the last N days. Leave out for all receipts.",
+        },
+        "supplier": {"type": "STRING", "description": "Supplier company name (partial match)."},
+        "with_issues_only": {
+          "type": "BOOLEAN", "description": "Only receipts with missing, rejected or extra units.",
+        },
+        "limit": _LIMIT,
+      },
+    },
+  },
+  {
+    "name": "get_goods_receipt",
+    "description": (
+      "Everything about ONE goods receipt: per item ordered, dispatched, received, "
+      "rejected, accepted into stock, issues and notes, plus its effect on the invoice."
+    ),
+    "parameters": {
+      "type": "OBJECT",
+      "properties": {
+        "grn_number": {
+          "type": "STRING", "description": "e.g. GRN-0004, or the order number PO-0003.",
+        },
+      },
+      "required": ["grn_number"],
+    },
+  },
+  {
+    "name": "list_supplier_payouts",
+    "description": (
+      "Money Kosh has sent (or is sending) to suppliers through RazorpayX: advance and "
+      "balance payouts with status (on hold, pending, processing, processed, failed), "
+      "bank reference (UTR), amounts held back; open amounts suppliers owe back; refunds "
+      "to the owner. Use for 'did the supplier get paid', 'why is a payout stuck'."
+    ),
+    "parameters": {
+      "type": "OBJECT",
+      "properties": {
+        "status": {
+          "type": "STRING",
+          "enum": ["on_hold", "pending", "processing", "processed", "failed"],
+        },
         "supplier": {"type": "STRING", "description": "Supplier company name (partial match)."},
         "limit": _LIMIT,
       },
@@ -1040,7 +1605,10 @@ TOOL_DECLARATIONS = [
 
 
 
-OWNER_ONLY_TOOLS = {"get_rfq_quotations", "list_invoices", "list_employees"}
+OWNER_ONLY_TOOLS = {
+  "get_rfq_quotations", "list_invoices", "get_invoice", "list_supplier_payouts",
+  "list_employees",
+}
 
 PRICE_FIELDS = {
   "price", "cost_price", "unit_price", "gst_rate",
@@ -1050,6 +1618,10 @@ PRICE_FIELDS = {
   "credit_amount", "credit_total", "unpaid_invoice_balance",
   "balance_due_total", "refund_due_total",
   "stock_value_at_selling_price", "stock_value_at_cost", "products_without_cost_price",
+  "gross_amount", "deducted_amount", "recovered_amount", "outstanding",
+  "advance_amount_on_order", "ready_to_pay_total", "balance_ready_to_pay",
+  "supplier_payments", "supplier_payouts", "balance_payments", "refunds_to_owner",
+  "supplier_debts", "open_supplier_debts", "invoice", "invoice_status",
 }
 
 
