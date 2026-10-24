@@ -690,7 +690,7 @@ class PurchaseOrderCancelApi(APIView):
 def po_queryset(base):
   return (
     base.select_related(
-      "rfq", "business__owner__profile", "supplier_profile__user", "shipment", "invoice"
+      "rfq", "business__owner__profile", "supplier_profile__user", "shipment", "invoice", "goods_receipt"
     )
     .prefetch_related(
       "items__product__category", "items__product__supply_category", "payments",
