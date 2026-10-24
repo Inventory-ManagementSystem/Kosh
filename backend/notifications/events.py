@@ -349,8 +349,9 @@ def payout_sent(payout):
   po = payout.purchase_order
   utr = f" Bank reference (UTR): {payout.utr}." if payout.utr else ""
   if payout.amount > 0:
-    title = f"{rupees(payout.amount)} {_what(payout)} sent for {po.number}"
-    body = f"The {_what(payout)} for {po.number} has been credited to your account.{utr}"
+    title = f"{po.business.business_name} sent {rupees(payout.amount)} for {po.number}"
+    body = (f"Payment for {po.number} ({_what(payout)}) has been sent to your account "
+            f"by {po.business.business_name}.{utr}")
   else:
     title = f"{po.number} {_what(payout)} used to repay an overpayment"
     body = "Nothing was sent this time."

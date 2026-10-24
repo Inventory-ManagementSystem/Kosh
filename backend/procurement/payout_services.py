@@ -419,15 +419,22 @@ def _failure_text(entity):
   return str(text)[:255]
 
 
+def _treat_reversal_as_success():
+  key = getattr(settings, "RAZORPAYX_KEY_ID", "") or settings.RAZORPAY_KEY_ID
+  return bool(getattr(settings, "RAZORPAYX_TEST_REVERSAL_AS_SUCCESS", False)) and key.startswith("rzp_test_")
+
 def _apply_status(payout, entity):
-  rz_status = entity.get("status") or ""
+  raw_status = entity.get("status") or ""
+  rz_status = raw_status
+  if rz_status in FAILED_STATES and _treat_reversal_as_success():
+    rz_status = "processed"
   if payout.status == Payout.Status.FAILED:
     return
   if payout.status == Payout.Status.PROCESSED and rz_status not in FAILED_STATES:
     return
 
   changed = ["razorpay_status", "updated_at"]
-  payout.razorpay_status = rz_status
+  payout.razorpay_status = raw_status
   if entity.get("utr"):
     payout.utr = entity["utr"]
     changed.append("utr")
