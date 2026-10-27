@@ -203,9 +203,12 @@ PAGE_PARAMETERS = [
   ),
 ]
 
+TAGS_RFQ=["Owner RFQs"]
+TAGS_RFQ_SUPP=["Supplier RFQs"]
 
 rfq_list_docs = extend_schema_view(
   get=extend_schema(
+    tags=TAGS_RFQ,
     operation_id="procurement_rfqs_list",
     summary="List RFQs",
     description=(
@@ -241,6 +244,7 @@ rfq_list_docs = extend_schema_view(
 
 rfq_detail_docs = extend_schema_view(
   get=extend_schema(
+    tags=TAGS_RFQ,
     operation_id="procurement_rfqs_retrieve",
     summary="Get RFQ",
     description=(
@@ -259,6 +263,7 @@ rfq_detail_docs = extend_schema_view(
     },
   ),
   patch=extend_schema(
+    tags=TAGS_RFQ,
     summary="Update RFQ",
     description=(
       "Partial update. Send only the fields you want to change; there is no PUT. "
@@ -308,6 +313,7 @@ rfq_detail_docs = extend_schema_view(
 
 rfq_cancel_docs = extend_schema_view(
   post=extend_schema(
+    tags=TAGS_RFQ,
     operation_id="procurement_rfqs_cancel",
     summary="Cancel RFQ",
     description=(
@@ -343,6 +349,7 @@ rfq_cancel_docs = extend_schema_view(
 
 rfq_summary_docs = extend_schema_view(
   get=extend_schema(
+    tags=TAGS_RFQ,
     operation_id="procurement_rfqs_summary",
     summary="RFQ Summary",
     description=(
@@ -562,6 +569,7 @@ QUOTATION_FIELDS_NOTE = (
 
 supplier_rfq_list_docs = extend_schema_view(
   get=extend_schema(
+    tags=TAGS_RFQ_SUPP,
     operation_id="procurement_supplier_rfqs_list",
     summary="Supplier: List My RFQs",
     description=(
@@ -599,6 +607,7 @@ supplier_rfq_list_docs = extend_schema_view(
 
 supplier_rfq_detail_docs = extend_schema_view(
   get=extend_schema(
+    tags=TAGS_RFQ_SUPP,
     operation_id="procurement_supplier_rfqs_retrieve",
     summary="Supplier: Get RFQ",
     description=(

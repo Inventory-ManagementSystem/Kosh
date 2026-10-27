@@ -46,7 +46,16 @@ def create_dispatch(*, business, outlet_id, items, user=None,
     pid = item["product_id"]
     merged[pid] = merged.get(pid, 0) + item["quantity"]
 
- 
+  inactive = list(
+    Product.objects.filter(
+      business=business, pk__in=merged, is_active=False
+    ).values_list("name", flat=True)
+  )
+  if inactive:
+    raise ValidationError(
+      {"items": f"Inactive products can't be dispatched: {', '.join(inactive)}."}
+    )
+
   Warehouse.objects.select_for_update().get(business=business)
   count = DispatchNote.objects.filter(business=business).count()
 

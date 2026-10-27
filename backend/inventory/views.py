@@ -13,7 +13,7 @@ from .serializers import (
 from .services import get_warehouse
 from .throttles import InventoryThrottle
 from django.db import transaction
-from django.db.models import ProtectedError
+from django.db.models import ProtectedError, RestrictedError
 from django.utils.dateparse import parse_date
 from rest_framework.exceptions import ValidationError
 
@@ -21,7 +21,7 @@ from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from accounts.pagination import StandardPagination
 
 from .ledger import record_movement, create_dispatch
-from procurement.alert_services import check_low_stock_on_commit
+from procurement.alert_services import check_low_stock_on_commit, close_active_alerts
 
 from .SwaggerDocs import (
   product_list_create_docs,
@@ -66,6 +66,9 @@ class ProductListCreateApi(APIView):
       "warehouse",
       )
     )
+    is_active = request.query_params.get("is_active", "true")
+    if is_active in ("true", "false"):
+      products = products.filter(is_active=(is_active == "true"))
     search = request.query_params.get("search")
     if search:
       products = products.filter(name__icontains=search)
@@ -177,7 +180,10 @@ class ProductDetailApi(APIView):
     serializer.is_valid(raise_exception=True)
     with transaction.atomic():
       serializer.save()
-      if REORDER_FIELDS & set(serializer.validated_data):
+      changed = set(serializer.validated_data)
+      if "is_active" in changed and not product.is_active:
+        close_active_alerts([product.pk])
+      elif "is_active" in changed or REORDER_FIELDS & changed:
         check_low_stock_on_commit(request.business, [product.pk])
     return success_response(
       "Product updated.",
@@ -186,10 +192,19 @@ class ProductDetailApi(APIView):
 
   def delete(self, request, pk):
     product = self.get_product(request, pk)
-    product.delete()
-    return success_response(
-      "Product deleted.",
-    )
+    try:
+      with transaction.atomic():
+        product.delete()
+    except (ProtectedError, RestrictedError):
+      with transaction.atomic():
+        product.is_active = False
+        product.save(update_fields=["is_active", "updated_at"])
+        close_active_alerts([product.pk])
+      return success_response(
+        "Product has order or dispatch history, so it was deactivated instead of deleted.",
+        {"archived": True},
+      )
+    return success_response("Product deleted.", {"archived": False})
 
 
 @product_adjust_stock_docs
