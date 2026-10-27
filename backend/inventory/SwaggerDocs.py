@@ -140,6 +140,16 @@ PRODUCT_LIST_PARAMS = [
     description="Only products in this category id.",
   ),
   OpenApiParameter(
+    "is_active", OpenApiTypes.STR, OpenApiParameter.QUERY,
+    enum=["true", "false", "all"],
+    default="true",
+    description=(
+      "Filter by active state. `true` (default) returns active products only, "
+      "`false` returns inactive ones (deactivated by editing, or by deleting a "
+      "product that has history), and `all` returns both."
+    ),
+  ),
+  OpenApiParameter(
     "ordering", OpenApiTypes.STR, OpenApiParameter.QUERY,
     description=(
       "Comma-separated sort fields: `name`, `price`, `created_at`, `updated_at`. "
@@ -193,7 +203,8 @@ product_list_create_docs = extend_schema_view(
     summary="List Products",
     description=(
       "Returns a page of the logged-in user's business products, with optional "
-      "search, filters and sorting. Results are paginated."
+      "search, filters and sorting. Results are paginated. Only active products "
+      "are returned unless you pass `is_active=false` or `is_active=all`."
     ),
     parameters=PRODUCT_LIST_PARAMS,
     responses={
@@ -257,7 +268,8 @@ product_detail_docs = extend_schema_view(
   put=extend_schema(
     summary="Replace Product",
     description=(
-      "Full update. `name`, `sku` and `price` are required. "
+      "Full update. `name`, `sku` and `price` are required. If `is_active` is "
+      "left out, the product is set to active. "
       + QUANTITY_NOTE + " " + OWNER_NOTE + " " + PRODUCT_BODY_NOTE
     ),
     request=ProductSerializer,
@@ -282,13 +294,17 @@ product_detail_docs = extend_schema_view(
   patch=extend_schema(
     summary="Update Product",
     description=(
-      "Partial update. Send only the fields you want to change. "
+      "Partial update. Send only the fields you want to change. Setting "
+      "`is_active` to false closes the product's open reorder alert; setting it "
+      "back to true re-checks stock and recreates the alert if the product is "
+      "still low. "
       + QUANTITY_NOTE + " " + OWNER_NOTE + " " + PRODUCT_BODY_NOTE
     ),
     request=ProductSerializer,
     examples=[
       OpenApiExample("Change Price", value={"price": "25.00"}, request_only=True),
       OpenApiExample("Deactivate Product", value={"is_active": False}, request_only=True),
+      OpenApiExample("Reactivate Product", value={"is_active": True}, request_only=True),
     ],
     responses={
       200: resp("Product updated.",
@@ -308,11 +324,23 @@ product_detail_docs = extend_schema_view(
   delete=extend_schema(
     summary="Delete Product",
     description=(
-      "Permanently deletes the product. To keep it but hide it, set `is_active` "
-      "to false instead. This also deletes the product stock history." + OWNER_NOTE
+      "If the product has no dispatch, RFQs, purchase order or invoice history, it is "
+      "permanently deleted along with its stock history (`archived` is false). "
+      "If it has history, it cannot be deleted, so it is deactivated instead: "
+      "`is_active` becomes false, its open reorder alerts are closed, and "
+      "`archived` is true. Deactivated products are listed with "
+      "`?is_active=false` and can be reactivated with a PATCH. " + OWNER_NOTE
     ),
     responses={
-      200: resp("Product deleted.", ok_example("Deleted", "Product deleted.")),
+      200: resp(
+        "Product deleted, or deactivated if it has history.",
+        ok_example("Deleted", "Product deleted.", data={"archived": False}),
+        ok_example(
+          "Deactivated Instead",
+          "Product has order or dispatch history, so it was deactivated instead of deleted.",
+          data={"archived": True},
+        ),
+      ),
       401: UNAUTHORIZED_RESPONSE,
       403: OWNER_ONLY_RESPONSE,
       404: not_found("Product"),
