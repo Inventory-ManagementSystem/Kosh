@@ -14,6 +14,7 @@ urlpatterns = [
   path("push/register/", views.RegisterDeviceApi.as_view(), name="push-register"),
   path("push/unregister/", views.UnregisterDeviceApi.as_view(), name="push-unregister"),
   path("push/test/", views.PushTestApi.as_view(), name="push-test"),
+  path("ws-ticket/", views.WsTicketApi.as_view(), name="ws-ticket"),
 ]
 
 

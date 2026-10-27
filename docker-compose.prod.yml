@@ -38,5 +38,18 @@ services:
       redis:
         condition: service_started
 
+  ws:
+  build: ./backend
+  restart: unless-stopped
+  command: daphne -b 0.0.0.0 -p 8000 config.asgi:application
+  mem_limit: 300m
+  ports:
+    - "127.0.0.1:8002:8000"
+  env_file:
+    - .env
+  depends_on:
+    redis:
+      condition: service_started
+
 volumes:
   redis_data:
