@@ -5,6 +5,7 @@ from django.db import transaction
 from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import extend_schema
 from rest_framework import status
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 
@@ -12,7 +13,7 @@ from accounts.pagination import StandardPagination
 from accounts.permissions import HasBusinessAccess
 from accounts.responses import error_response, success_response, validation_error_response
 
-from .llm import AssistantError, GeminiAgent
+from .llm import AssistantError, Attachment, GeminiAgent
 from .models import ChatConversation, ChatMessage
 from .throttles import AssistantBurstThrottle, AssistantDailyThrottle
 from .serializers import (
@@ -20,6 +21,7 @@ from .serializers import (
   ChatConversationSerializer,
   ChatReplySerializer,
   ChatRequestSerializer,
+  attachment_mime_type,
 )
 
 HISTORY_LIMIT = 20 
@@ -42,14 +44,20 @@ class ConversationPagination(StandardPagination):
   summary="Ask the AI assistant a question about your business data",
   description=(
     "Send `message`. Leave out `conversation_id` to start a new conversation; send the "
-    "returned `conversation_id` with follow-up questions to keep context."
+    "returned `conversation_id` with follow-up questions to keep context. To ask about a "
+    "file, send multipart/form-data with `attachment` (one JPG/PNG/WEBP image up to 5 MB "
+    "or one PDF up to 10 MB and 20 pages); `message` is optional then."
   ),
-  request=ChatRequestSerializer,
+  request={
+    "multipart/form-data": ChatRequestSerializer,
+    "application/json": ChatRequestSerializer,
+  },
   responses={200: ChatReplySerializer},
 )
 class ChatApi(APIView):
   permission_classes = [IsAuthenticated, HasBusinessAccess]
   throttle_classes = [AssistantBurstThrottle, AssistantDailyThrottle]
+  parser_classes = [MultiPartParser, FormParser, JSONParser]
 
   def post(self, request):
     serializer = ChatRequestSerializer(data=request.data)
@@ -57,6 +65,11 @@ class ChatApi(APIView):
       return validation_error_response(serializer)
     message = serializer.validated_data["message"]
     conversation_id = serializer.validated_data.get("conversation_id")
+    upload = serializer.validated_data.get("attachment")
+    attachment = None
+    if upload:
+      attachment = Attachment(data=upload.read(), mime_type=attachment_mime_type(upload.name))
+      upload.seek(0)
 
     conversation = None
     history = []
@@ -67,7 +80,8 @@ class ChatApi(APIView):
 
     try:
       result = get_agent().run(
-        business=request.business, user=request.user, history=history, message=message
+        business=request.business, user=request.user, history=history, message=message,
+        attachment=attachment,
       )
     except AssistantError as exc:
       return error_response(exc.message, exc.code, status=exc.status)
@@ -75,10 +89,14 @@ class ChatApi(APIView):
     with transaction.atomic():
       if conversation is None:
         conversation = ChatConversation.objects.create(
-          business=request.business, user=request.user, title=message[:60],
+          business=request.business, user=request.user,
+          title=(message or (upload.name if upload else ""))[:60],
         )
       ChatMessage.objects.create(
         conversation=conversation, role=ChatMessage.Role.USER, content=message,
+        attachment=upload,
+        attachment_name=upload.name[:255] if upload else "",
+        attachment_type=attachment.mime_type if attachment else "",
       )
       ChatMessage.objects.create(
         conversation=conversation, role=ChatMessage.Role.ASSISTANT,

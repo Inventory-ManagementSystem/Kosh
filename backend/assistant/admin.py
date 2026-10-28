@@ -8,7 +8,7 @@ from .models import ChatConversation, ChatMessage
 class ChatMessageInline(admin.TabularInline):
   model = ChatMessage
   extra = 0
-  fields = ["role", "content", "tools_used", "created_at"]
+  fields = ["role", "content", "attachment_name", "tools_used", "created_at"]
   readonly_fields = fields
   can_delete = False
 
