@@ -22,7 +22,10 @@ REMINDER_HOURS = 6
 def check_low_stock():
   created = 0
   for business in Business.objects.iterator():
-    created += create_alerts_for_business(business)
+    try:
+      created += create_alerts_for_business(business)
+    except Exception:
+      logger.exception("Low-stock check failed for business %s", business.pk)
   return created
 
 
