@@ -298,6 +298,7 @@ SPECTACULAR_SETTINGS = {
     "DESCRIPTION": "API documentation for Kosh backend",
     "VERSION": "1.0.0",
     "SERVE_INCLUDE_SCHEMA": False,
+    "COMPONENT_SPLIT_REQUEST": True,
 }
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(minutes=10),

@@ -117,6 +117,9 @@ and NO permission settings — what each role can do is fixed.
   updates, quotations, purchase orders, payments, dispatches, goods receipts and
   employee invites.
 - Account: profile, change password, login with email, Google or GitHub.
+- Assistant attachments: with a question you can attach one image (JPG, PNG or WEBP,
+  up to 5 MB) or one PDF (up to 10 MB and 20 pages). The assistant explains it and can
+  check it against your business data, for example items on a bill against your stock.
 
 ## Not available in Kosh (never suggest these)
 Sales orders, billing or invoices for customers, splitting one order into several
