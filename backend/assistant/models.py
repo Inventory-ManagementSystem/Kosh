@@ -6,6 +6,13 @@ import uuid
 from django.conf import settings
 from django.db import models
 
+from config.storage import PrivateMediaStorage
+
+
+def chat_attachment_path(instance, filename):
+  extension = filename.rsplit(".", 1)[-1].lower()
+  return f"{instance.conversation.business_id}/{uuid.uuid4().hex}.{extension}"
+
 
 class ChatConversation(models.Model):
   id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -41,6 +48,11 @@ class ChatMessage(models.Model):
   role = models.CharField(max_length=10, choices=Role.choices)
   content = models.TextField()
   tools_used = models.JSONField(default=list, blank=True)
+  attachment = models.FileField(
+    upload_to=chat_attachment_path, storage=PrivateMediaStorage, null=True, blank=True
+  )
+  attachment_name = models.CharField(max_length=255, blank=True, default="")
+  attachment_type = models.CharField(max_length=50, blank=True, default="")
   created_at = models.DateTimeField(auto_now_add=True)
 
   class Meta:
