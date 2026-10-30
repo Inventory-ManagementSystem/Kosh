@@ -227,6 +227,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "procurement.tasks.sync_payouts",
         "schedule": crontab(minute="*/30"),
     },
+    "notify-stuck-orders": {
+        "task": "procurement.tasks.notify_stuck_orders",
+        "schedule": crontab(hour=9, minute=0),
+    },
 }
 
 # Password validation

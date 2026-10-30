@@ -21,7 +21,7 @@ from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from accounts.pagination import StandardPagination
 
 from .ledger import record_movement, create_dispatch
-from procurement.alert_services import check_low_stock_on_commit, close_active_alerts
+from procurement.alert_services import check_low_stock_on_commit, close_active_alerts, close_recovered_alerts_on_commit
 
 from .SwaggerDocs import (
   product_list_create_docs,
@@ -185,6 +185,7 @@ class ProductDetailApi(APIView):
         close_active_alerts([product.pk])
       elif "is_active" in changed or REORDER_FIELDS & changed:
         check_low_stock_on_commit(request.business, [product.pk])
+        close_recovered_alerts_on_commit(request.business, [product.pk])
     return success_response(
       "Product updated.",
       serializer.data,
@@ -231,6 +232,8 @@ class ProductAdjustStockApi(APIView):
       )
       if data["change"] < 0:
         check_low_stock_on_commit(request.business, [pk])
+      else:
+        close_recovered_alerts_on_commit(request.business, [pk])
     product = movement.product
 
     serializer = ProductSerializer(
