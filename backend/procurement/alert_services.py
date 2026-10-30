@@ -91,14 +91,13 @@ def close_active_alerts(product_ids):
     product_id__in=product_ids, status__in=ReorderSuggestion.ACTIVE
   ).update(status=ReorderSuggestion.Status.CLOSED, updated_at=timezone.now())
 
-def close_recovered_alerts(business, product_ids):
-  alerts = list(
-    ReorderSuggestion.objects.filter(
-      business=business,
-      product_id__in=product_ids,
-      status=ReorderSuggestion.Status.OPEN,
-    ).select_related("product")
+def close_recovered_alerts(business, product_ids=None):
+  qs = ReorderSuggestion.objects.filter(
+    business=business, status=ReorderSuggestion.Status.OPEN
   )
+  if product_ids is not None:
+    qs = qs.filter(product_id__in=product_ids)
+  alerts = list(qs.select_related("product"))
   if not alerts:
     return 0
   stats = get_dispatch_stats(business)
