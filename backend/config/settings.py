@@ -233,6 +233,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "procurement.tasks.notify_stuck_orders",
         "schedule": crontab(hour=9, minute=0),
     },
+    "flush-expired-tokens": {
+        "task": "accounts.tasks.flush_expired_tokens",
+        "schedule": crontab(hour=3, minute=30),
+    },
 }
 
 # Password validation
