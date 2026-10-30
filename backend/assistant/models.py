@@ -11,13 +11,20 @@ from config.storage import PrivateMediaStorage
 
 def chat_attachment_path(instance, filename):
   extension = filename.rsplit(".", 1)[-1].lower()
-  return f"{instance.conversation.business_id}/{uuid.uuid4().hex}.{extension}"
+  conversation = instance.conversation
+  folder = conversation.business_id or f"suppliers/{conversation.supplier_profile_id}"
+  return f"{folder}/{uuid.uuid4().hex}.{extension}"
 
 
 class ChatConversation(models.Model):
   id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
   business = models.ForeignKey(
-    "accounts.Business", on_delete=models.CASCADE, related_name="chat_conversations"
+    "accounts.Business", on_delete=models.CASCADE, related_name="chat_conversations",
+    null=True, blank=True,
+  )
+  supplier_profile = models.ForeignKey(
+    "suppliers.SupplierProfile", on_delete=models.CASCADE, related_name="chat_conversations",
+    null=True, blank=True,
   )
   user = models.ForeignKey(
     settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="chat_conversations"
@@ -30,6 +37,18 @@ class ChatConversation(models.Model):
     ordering = ["-updated_at"]
     indexes = [
       models.Index(fields=["business", "user", "-updated_at"], name="assistant_conv_biz_user_upd"),
+      models.Index(
+        fields=["supplier_profile", "user", "-updated_at"], name="assistant_conv_sup_user_upd"
+      ),
+    ]
+    constraints = [
+      models.CheckConstraint(
+        condition=(
+          models.Q(business__isnull=False, supplier_profile__isnull=True)
+          | models.Q(business__isnull=True, supplier_profile__isnull=False)
+        ),
+        name="assistant_conv_one_owner",
+      ),
     ]
 
   def __str__(self):
