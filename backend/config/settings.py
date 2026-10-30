@@ -48,6 +48,7 @@ EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER")
 EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD")
 DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL")
 EMAIL_TIMEOUT=10
+CONTACT_RECEIVER_EMAIL = os.getenv("CONTACT_RECEIVER_EMAIL", "")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "https://koshh.me")
 
 FIREBASE_CREDENTIALS_B64 = os.getenv("FIREBASE_CREDENTIALS_B64", "")
@@ -97,6 +98,7 @@ INSTALLED_APPS = [
     'django_cleanup.apps.CleanupConfig',
     'procurement',
     'assistant.apps.AssistantConfig',
+    'contact',
 
 ]
 
@@ -227,6 +229,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "procurement.tasks.sync_payouts",
         "schedule": crontab(minute="*/30"),
     },
+    "notify-stuck-orders": {
+        "task": "procurement.tasks.notify_stuck_orders",
+        "schedule": crontab(hour=9, minute=0),
+    },
 }
 
 # Password validation
@@ -286,6 +292,7 @@ REST_FRAMEWORK = {
         "anon": "20/min",
         "user": "100/min",
         "inventory":"60/min",
+        "contact": "20/hour",
     },
 
     "EXCEPTION_HANDLER": "accounts.exception_handler.custom_exception_handler",

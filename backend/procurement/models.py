@@ -271,9 +271,10 @@ class PurchaseOrder(models.Model):
   advance_due_by = models.DateTimeField(null=True, blank=True)
   issued_at = models.DateTimeField(null=True, blank=True)
   cancelled_at = models.DateTimeField(null=True, blank=True)
+  stuck_notified_at=models.DateTimeField(null=True, blank=True)
   created_at = models.DateTimeField(auto_now_add=True)
   updated_at = models.DateTimeField(auto_now=True)
- 
+
   class Meta:
     ordering = ["-created_at"]
     indexes = [

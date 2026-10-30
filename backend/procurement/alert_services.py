@@ -90,3 +90,33 @@ def close_active_alerts(product_ids):
   ReorderSuggestion.objects.filter(
     product_id__in=product_ids, status__in=ReorderSuggestion.ACTIVE
   ).update(status=ReorderSuggestion.Status.CLOSED, updated_at=timezone.now())
+
+def close_recovered_alerts(business, product_ids=None):
+  qs = ReorderSuggestion.objects.filter(
+    business=business, status=ReorderSuggestion.Status.OPEN
+  )
+  if product_ids is not None:
+    qs = qs.filter(product_id__in=product_ids)
+  alerts = list(qs.select_related("product"))
+  if not alerts:
+    return 0
+  stats = get_dispatch_stats(business)
+  recovered = [
+    alert.pk for alert in alerts
+    if not calculate_reorder(alert.product, stats).needs_reorder
+  ]
+  return ReorderSuggestion.objects.filter(pk__in=recovered).update(
+    status=ReorderSuggestion.Status.CLOSED, updated_at=timezone.now()
+  )
+
+
+def close_recovered_alerts_on_commit(business, product_ids):
+  product_ids = list(product_ids)
+
+  def run():
+    try:
+      close_recovered_alerts(business, product_ids)
+    except Exception:
+      logger.exception("Closing recovered alerts failed for business %s", business.pk)
+
+  transaction.on_commit(run)

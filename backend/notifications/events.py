@@ -436,3 +436,32 @@ def owner_refund_sent(refund):
     kind=Kind.PAYMENT,
   )
 
+@safe
+def po_dispatch_overdue(po, days_late):
+  supplier = po.supplier_profile
+  notify(
+    po.business.owner,
+    f"{po.number} is {days_late} day(s) overdue",
+    f"{supplier.company_name} has not dispatched this order. They promised delivery by "
+    f"{po.delivery_date:%d %b %Y}. Please contact the supplier.",
+    kind=Kind.PURCHASE_ORDER,
+  )
+  notify(
+    supplier.user,
+    f"Please dispatch {po.number}",
+    f"{po.business.business_name} is waiting for this order, which was due by "
+    f"{po.delivery_date:%d %b %Y}. Mark it as dispatched as soon as it ships.",
+    kind=Kind.PURCHASE_ORDER,
+  )
+
+@safe
+def po_receipt_overdue(po, days_late):
+  notify(
+    po.business.owner,
+    f"Did {po.number} arrive?",
+    f"{po.supplier_profile.company_name} dispatched this order and expected it by "
+    f"{po.shipment.expected_delivery_date:%d %b %Y} ({days_late} day(s) ago). "
+    "If the goods are here, confirm the receipt so your stock updates and the balance "
+    "can be paid.",
+    kind=Kind.PURCHASE_ORDER,
+  )

@@ -7,7 +7,8 @@ from django.utils import timezone
 from accounts.models import Business
 from notifications import events
 
-from .alert_services import create_alerts_for_business
+from django.db.models import Q
+from .alert_services import create_alerts_for_business, close_recovered_alerts
 from .models import RFQ, PurchaseOrder, ReorderSuggestion, Payout
 from .payment_services import PaymentError, expire_advance, refund_payment, send_owner_refund
 from .rfq_services import RFQCreationError, create_rfqs_for_suggestions
@@ -16,13 +17,22 @@ from .payout_services import PayoutError, send_payout, sync_payout
 logger = logging.getLogger(__name__)
 
 REMINDER_HOURS = 6
+STUCK_GRACE_DAYS=2
+STUCK_REMINDER_DAYS=3
 
 
 @shared_task
 def check_low_stock():
   created = 0
   for business in Business.objects.iterator():
-    created += create_alerts_for_business(business)
+    try:
+      close_recovered_alerts(business)
+    except Exception:
+      logger.exception("Closing stale alerts failed for business %s", business.pk)
+    try:
+      created += create_alerts_for_business(business)
+    except Exception:
+      logger.exception("Low-stock check failed for business %s", business.pk)
   return created
 
 
@@ -172,3 +182,44 @@ def refund_owner(self, refund_pk):
   except PaymentError as err:
     raise self.retry(exc=err)
 
+@shared_task
+def notify_stuck_orders():
+  now = timezone.now()
+  today = timezone.localdate()
+  grace_date = today - timedelta(days=STUCK_GRACE_DAYS)
+  not_recent = Q(stuck_notified_at__isnull=True) | Q(
+    stuck_notified_at__lte=now - timedelta(days=STUCK_REMINDER_DAYS)
+  )
+
+  not_dispatched = PurchaseOrder.objects.filter(
+    not_recent,
+    status=PurchaseOrder.Status.ISSUED,
+    delivery_date__lt=grace_date,
+  ).select_related("business__owner", "supplier_profile")
+
+  not_received = PurchaseOrder.objects.filter(
+    not_recent,
+    status=PurchaseOrder.Status.DISPATCHED,
+    shipment__expected_delivery_date__lt=grace_date,
+    shipment__dispatched_at__lt=now - timedelta(days=STUCK_GRACE_DAYS),
+  ).select_related("business__owner", "supplier_profile", "shipment")
+
+  sent = 0
+  for po in list(not_dispatched):
+    try:
+      events.po_dispatch_overdue(po, (today - po.delivery_date).days)
+    except Exception:
+      logger.exception("Overdue notice failed for order %s", po.pk)
+      continue
+    PurchaseOrder.objects.filter(pk=po.pk).update(stuck_notified_at=now)
+    sent += 1
+
+  for po in list(not_received):
+    try:
+      events.po_receipt_overdue(po, (today - po.shipment.expected_delivery_date).days)
+    except Exception:
+      logger.exception("Overdue notice failed for order %s", po.pk)
+      continue
+    PurchaseOrder.objects.filter(pk=po.pk).update(stuck_notified_at=now)
+    sent += 1
+  return sent
