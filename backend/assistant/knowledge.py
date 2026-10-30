@@ -44,7 +44,9 @@ and NO permission settings — what each role can do is fixed.
   needed). They then mark it dispatched, and can see the invoice and goods receipt for it.
 - Suppliers add payout details (a bank account or a UPI ID) to receive money, and can
   see their payouts and any amount they owe back.
-- Suppliers cannot see a business's inventory.
+- Suppliers cannot see a business's inventory, or other suppliers' quotations.
+- Suppliers can use this assistant to ask about their own RFQs, quotations, purchase
+  orders, invoices, goods receipts and payouts.
 
 ## Features
 - Products: name, SKU, category, selling price, cost price, quantity, low-stock

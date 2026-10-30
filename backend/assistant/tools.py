@@ -5,7 +5,7 @@ from decimal import Decimal
 
 from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist
 from django.core.serializers.json import DjangoJSONEncoder
-from django.db.models import Count, DecimalField, F, Q, Sum
+from django.db.models import Count, DecimalField, F, OuterRef, Q, Subquery, Sum
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 
@@ -25,6 +25,7 @@ from procurement.models import (
   PurchaseOrder,
   Quotation,
   ReorderSuggestion,
+  RFQRecipient,
   SupplierDebt,
 )
 from suppliers.models import Supplier
@@ -457,28 +458,29 @@ def get_rfq_quotations(business, rfq_number):
     "requested_items": [
       {"product": i.product_name, "sku": i.sku, "quantity": i.quantity} for i in rfq.items.all()
     ],
-    "quotations": [
+    "quotations": [_quotation_row(q) for q in quotations],
+  }
+
+
+def _quotation_row(q):
+  return {
+    "supplier": q.supplier_profile.company_name,
+    "status": q.get_status_display(),
+    "subtotal": q.subtotal,
+    "tax_total": q.tax_total,
+    "grand_total": q.grand_total,
+    "advance_amount": q.advance_amount,
+    "delivery_date": q.delivery_date,
+    "valid_until": q.valid_until,
+    "items": [
       {
-        "supplier": q.supplier_profile.company_name,
-        "status": q.get_status_display(),
-        "subtotal": q.subtotal,
-        "tax_total": q.tax_total,
-        "grand_total": q.grand_total,
-        "advance_amount": q.advance_amount,
-        "delivery_date": q.delivery_date,
-        "valid_until": q.valid_until,
-        "items": [
-          {
-            "product": item.rfq_item.product_name,
-            "quantity": item.quantity,
-            "unit_price": item.unit_price,
-            "gst_rate": item.gst_rate,
-            "line_total": item.line_total,
-          }
-          for item in q.items.all()
-        ],
+        "product": item.rfq_item.product_name,
+        "quantity": item.quantity,
+        "unit_price": item.unit_price,
+        "gst_rate": item.gst_rate,
+        "line_total": item.line_total,
       }
-      for q in quotations
+      for item in q.items.all()
     ],
   }
 
@@ -734,7 +736,10 @@ def get_purchase_order(business, po_number):
     raise ToolError(
       f"No purchase order found with number '{po_number}'. Use list_purchase_orders."
     )
+  return _order_details(po, _next_step)
 
+
+def _order_details(po, next_step):
   shipment = _related(po, "shipment")
   receipt = _related(po, "goods_receipt")
   invoice = _related(po, "invoice")
@@ -762,7 +767,7 @@ def get_purchase_order(business, po_number):
 
   return {
     **_order_row(po),
-    "next_step": _next_step(po, invoice),
+    "next_step": next_step(po, invoice),
     "items": items,
     "payments": [
       {
@@ -924,7 +929,10 @@ def _find_invoice(business, invoice_number, supplier=None):
 
 
 def get_invoice(business, invoice_number, supplier=None):
-  inv = _find_invoice(business, invoice_number, supplier)
+  return _invoice_details(_find_invoice(business, invoice_number, supplier), _invoice_next_step)
+
+
+def _invoice_details(inv, next_step):
   po = inv.purchase_order
   receipt = _related(po, "goods_receipt")
   return {
@@ -938,7 +946,7 @@ def get_invoice(business, invoice_number, supplier=None):
       "discrepancy_credit is added at the goods receipt for units that were missing "
       "or rejected. refund_due is advance paid beyond what is payable."
     ),
-    "next_step": _invoice_next_step(inv, po),
+    "next_step": next_step(inv, po),
     "goods_receipt_date": receipt.created_at if receipt else None,
     "items": [
       {
@@ -990,27 +998,7 @@ def list_goods_receipts(business, days=None, supplier=None, with_issues_only=Fal
     business=business, status=PurchaseOrder.Status.DISPATCHED
   ).select_related("supplier_profile", "shipment")
 
-  rows = []
-  for grn in receipts[:_limit(limit, 10)]:
-    po = grn.purchase_order
-    invoice = _related(po, "invoice")
-    items = list(grn.items.all())
-    received = sum(i.received_quantity for i in items)
-    rejected = sum(i.rejected_quantity for i in items)
-    rows.append({
-      "number": grn.number,
-      "purchase_order": po.number,
-      "supplier": po.supplier_profile.company_name,
-      "received_at": grn.created_at,
-      "received_by": _user_name(grn.received_by),
-      "units_received": received,
-      "units_rejected": rejected,
-      "units_accepted_into_stock": received - rejected,
-      "issues": len(grn.discrepancies.all()),
-      "credit_total": sum((i.credit_amount for i in items), Decimal("0")),
-      "invoice_number": invoice.number if invoice else None,
-      "invoice_status": invoice.get_status_display() if invoice else None,
-    })
+  rows = [_goods_receipt_row(grn) for grn in receipts[:_limit(limit, 10)]]
   return {
     "period_days": period,
     "total": receipts.count(),
@@ -1029,6 +1017,28 @@ def list_goods_receipts(business, days=None, supplier=None, with_issues_only=Fal
   }
 
 
+def _goods_receipt_row(grn):
+  po = grn.purchase_order
+  invoice = _related(po, "invoice")
+  items = list(grn.items.all())
+  received = sum(i.received_quantity for i in items)
+  rejected = sum(i.rejected_quantity for i in items)
+  return {
+    "number": grn.number,
+    "purchase_order": po.number,
+    "supplier": po.supplier_profile.company_name,
+    "received_at": grn.created_at,
+    "received_by": _user_name(grn.received_by),
+    "units_received": received,
+    "units_rejected": rejected,
+    "units_accepted_into_stock": received - rejected,
+    "issues": len(grn.discrepancies.all()),
+    "credit_total": sum((i.credit_amount for i in items), Decimal("0")),
+    "invoice_number": invoice.number if invoice else None,
+    "invoice_status": invoice.get_status_display() if invoice else None,
+  }
+
+
 def get_goods_receipt(business, grn_number):
   ref = (grn_number or "").strip()
   if not ref:
@@ -1042,7 +1052,10 @@ def get_goods_receipt(business, grn_number):
     grn = receipts.filter(number__iexact=ref).first()
     if grn is None:
       raise ToolError(f"No goods receipt found with number '{ref}'. Use list_goods_receipts.")
+  return _goods_receipt_details(grn, _invoice_next_step)
 
+
+def _goods_receipt_details(grn, next_step):
   po = grn.purchase_order
   invoice = _related(po, "invoice")
   items = grn.items.select_related("purchase_order_item").prefetch_related("discrepancies")
@@ -1081,7 +1094,7 @@ def get_goods_receipt(business, grn_number):
       "advance_applied": invoice.advance_applied,
       "balance_due": invoice.balance_due,
       "refund_due": invoice.refund_due,
-      "next_step": _invoice_next_step(invoice, po),
+      "next_step": next_step(invoice, po),
     } if invoice else None,
   }
 
@@ -1263,6 +1276,495 @@ def list_employees(business, days=30):
     "note": "Removed employees are deleted, so they are not listed. Invites expire after 14 days.",
   }
 
+
+SUPPLIER_VISIBLE = PurchaseOrder.SUPPLIER_VISIBLE
+
+
+def _for_supplier(row, business, *hidden):
+  for key in ("supplier", *hidden):
+    row.pop(key, None)
+  return {**row, "buyer": business.business_name}
+
+
+def _filter_choice(queryset, value, valid, field="status"):
+  if not value:
+    return queryset
+  if value not in valid:
+    raise ToolError(f"{field} must be one of: {', '.join(valid)}.")
+  return queryset.filter(**{field: value})
+
+
+def _pick_for_buyer(queryset, ref, buyer, what, list_tool, number_field="number",
+                    business_path="business"):
+  ref = (ref or "").strip()
+  if not ref:
+    raise ToolError(f"Give the {what} number.")
+  matches = queryset.filter(**{f"{number_field}__iexact": ref})
+  if buyer:
+    matches = matches.filter(**{f"{business_path}__business_name__icontains": buyer})
+  matches = list(matches[:6])
+  if len(matches) == 1:
+    return matches[0]
+  if not matches:
+    raise ToolError(f"No {what} found with number '{ref}'. Use {list_tool}.")
+  options = ", ".join(_buyer_of(m, business_path).business_name for m in matches[:5])
+  raise ToolError(f"Several buyers have a {what} numbered '{ref}': {options}. Ask which buyer.")
+
+
+def _buyer_of(obj, path):
+  for name in path.split("__"):
+    obj = getattr(obj, name)
+  return obj
+
+
+def _visible_order_number():
+  return Subquery(
+    PurchaseOrder.objects.filter(
+      quotation=OuterRef("pk"), status__in=SUPPLIER_VISIBLE
+    ).values("number")[:1]
+  )
+
+
+def _my_quotation_row(quotation, order_number):
+  status = quotation.get_status_display()
+  if quotation.status == Quotation.Status.ACCEPTED and not order_number:
+    status = Quotation.Status.SUBMITTED.label
+  row = _quotation_row(quotation)
+  row.pop("supplier")
+  return {
+    **row,
+    "status": status,
+    "revision": quotation.revision,
+    "submitted_at": quotation.submitted_at,
+    "purchase_order": order_number,
+  }
+
+
+def _my_quotation(recipient):
+  quotation = _related(recipient, "quotation")
+  if quotation is None:
+    return None, None
+  order = quotation.purchase_orders.filter(status__in=SUPPLIER_VISIBLE).first()
+  return quotation, order.number if order else None
+
+
+def _can_quote(rfq):
+  return rfq.status == RFQ.Status.OPEN and rfq.deadline > timezone.now()
+
+
+def _rfq_next_step(recipient, quotation, order_number):
+  rfq = recipient.rfq
+  quoted = quotation is not None and quotation.status != Quotation.Status.WITHDRAWN
+  if rfq.status == RFQ.Status.CANCELLED:
+    return "The buyer cancelled this RFQ."
+  if recipient.status == RFQRecipient.Status.DECLINED:
+    return "You declined this RFQ."
+  if order_number:
+    return f"Your quotation was accepted. Purchase order {order_number} has been issued to you."
+  if quoted and quotation.status == Quotation.Status.REJECTED:
+    return "The buyer went with another quotation for this RFQ."
+  if _can_quote(rfq):
+    if quoted:
+      return "You can still revise or withdraw your quotation until the deadline."
+    return "You can submit a quotation or decline the RFQ before the deadline."
+  if quoted:
+    return "The deadline has passed. Waiting for the buyer's decision."
+  return "The deadline has passed, so you can no longer quote."
+
+
+def _my_rfq_queryset(supplier):
+  return (
+    RFQRecipient.objects.filter(supplier_profile=supplier)
+    .select_related("rfq__business", "rfq__supply_category", "quotation__supplier_profile")
+    .prefetch_related("rfq__items", "quotation__items__rfq_item")
+    .order_by("-created_at")
+  )
+
+
+def _waiting_for_response(invitations):
+  return invitations.filter(
+    status__in=[RFQRecipient.Status.SENT, RFQRecipient.Status.VIEWED],
+    rfq__status=RFQ.Status.OPEN,
+    rfq__deadline__gt=timezone.now(),
+  )
+
+
+def list_my_rfqs(supplier, status=None, open_only=False, buyer=None, limit=10):
+  invitations = _filter_choice(_my_rfq_queryset(supplier), status, RFQRecipient.Status.values)
+  if open_only:
+    invitations = invitations.filter(rfq__status=RFQ.Status.OPEN, rfq__deadline__gt=timezone.now())
+  if buyer:
+    invitations = invitations.filter(rfq__business__business_name__icontains=buyer)
+
+  rows = []
+  for r in invitations[:_limit(limit, 10)]:
+    quotation, order_number = _my_quotation(r)
+    items = r.rfq.items.all()
+    rows.append({
+      "number": r.rfq.number,
+      "buyer": r.rfq.business.business_name,
+      "buyer_city": r.rfq.business.city,
+      "supply_category": _rfq_category(r.rfq),
+      "rfq_status": r.rfq.get_status_display(),
+      "my_status": r.get_status_display(),
+      "deadline": r.rfq.deadline,
+      "can_quote": _can_quote(r.rfq),
+      "items": len(items),
+      "total_quantity": sum(i.quantity for i in items),
+      "my_quotation_total": quotation.grand_total if quotation else None,
+      "next_step": _rfq_next_step(r, quotation, order_number),
+    })
+  return {
+    "total": invitations.count(),
+    "open_rfqs_waiting_for_your_response": _waiting_for_response(
+      RFQRecipient.objects.filter(supplier_profile=supplier)
+    ).count(),
+    "note": "RFQ numbers restart for each buyer, so RFQ-0001 can come from several buyers.",
+    "showing": len(rows),
+    "rfqs": rows,
+  }
+
+
+def get_my_rfq(supplier, rfq_number, buyer=None):
+  recipient = _pick_for_buyer(
+    _my_rfq_queryset(supplier), rfq_number, buyer, "RFQ", "list_my_rfqs",
+    number_field="rfq__number", business_path="rfq__business",
+  )
+  rfq = recipient.rfq
+  quotation, order_number = _my_quotation(recipient)
+  return {
+    "number": rfq.number,
+    "buyer": rfq.business.business_name,
+    "buyer_city": rfq.business.city,
+    "supply_category": _rfq_category(rfq),
+    "rfq_status": rfq.get_status_display(),
+    "my_status": recipient.get_status_display(),
+    "invited_as": recipient.get_source_display(),
+    "deadline": rfq.deadline,
+    "can_quote": _can_quote(rfq),
+    "notes": rfq.notes or None,
+    "next_step": _rfq_next_step(recipient, quotation, order_number),
+    "requested_items": [
+      {"product": i.product_name, "sku": i.sku, "quantity": i.quantity} for i in rfq.items.all()
+    ],
+    "my_quotation": _my_quotation_row(quotation, order_number) if quotation else None,
+  }
+
+
+def list_my_quotations(supplier, status=None, buyer=None, limit=10):
+  quotations = (
+    Quotation.objects.filter(supplier_profile=supplier)
+    .select_related("rfq__business", "supplier_profile")
+    .prefetch_related("items__rfq_item")
+    .annotate(order_number=_visible_order_number())
+    .order_by("-updated_at")
+  )
+  if status == Quotation.Status.SUBMITTED:
+    quotations = quotations.filter(
+      Q(status=status) | Q(status=Quotation.Status.ACCEPTED, order_number__isnull=True)
+    )
+  elif status == Quotation.Status.ACCEPTED:
+    quotations = quotations.filter(status=status, order_number__isnull=False)
+  else:
+    quotations = _filter_choice(quotations, status, Quotation.Status.values)
+  if buyer:
+    quotations = quotations.filter(rfq__business__business_name__icontains=buyer)
+
+  rows = [
+    {"rfq_number": q.rfq.number, "buyer": q.rfq.business.business_name,
+     **_my_quotation_row(q, q.order_number)}
+    for q in quotations[:_limit(limit, 10)]
+  ]
+  return {"total": quotations.count(), "showing": len(rows), "quotations": rows}
+
+
+DEBT_MEANING = (
+  "The supplier received more advance than the accepted goods were worth. Kosh holds the "
+  "outstanding amount back from their next payouts and refunds it to the buyer."
+)
+
+
+def _supplier_invoice_next_step(invoice, po=None):
+  po = po or invoice.purchase_order
+  if po.status not in RECEIVED_STATUSES:
+    return (
+      "Goods not received yet. The buyer records a goods receipt when the delivery "
+      "arrives; the balance is worked out after that and is reduced for any missing "
+      "or rejected units."
+    )
+  if invoice.status == Invoice.Status.PAID:
+    step = "Settled: nothing is left to be paid on this invoice."
+    if invoice.refund_due > 0:
+      step += (
+        " The advance was more than the accepted goods were worth; any extra the "
+        "supplier already received is held back from their next payouts."
+      )
+    return step
+  if invoice.balance_due > 0:
+    return (
+      "Goods received. Waiting for the buyer to pay the balance; Kosh then sends it "
+      "to the supplier automatically."
+    )
+  return "Goods received; nothing is left to be paid."
+
+
+def _supplier_order_next_step(po, invoice=None):
+  if po.status == PurchaseOrder.Status.ISSUED:
+    return (
+      "The supplier should mark the order dispatched with the expected delivery date and "
+      "an optional tracking note. They may ship less than ordered. Kosh then creates the "
+      "invoice for what was shipped and sends the advance payout, if there is one."
+    )
+  if po.status == PurchaseOrder.Status.DISPATCHED:
+    return "On the way. The buyer records a goods receipt when the delivery arrives."
+  return _supplier_invoice_next_step(invoice, po) if invoice else "Goods received."
+
+
+def _my_order_queryset(supplier):
+  return (
+    PurchaseOrder.objects.filter(supplier_profile=supplier, status__in=SUPPLIER_VISIBLE)
+    .select_related("business", "supplier_profile", "rfq")
+    .prefetch_related("payments")
+  )
+
+
+def list_my_orders(supplier, status=None, buyer=None, limit=10):
+  orders = _filter_choice(_my_order_queryset(supplier), status, [s.value for s in SUPPLIER_VISIBLE])
+  if buyer:
+    orders = orders.filter(business__business_name__icontains=buyer)
+  by_status = {
+    row["status"]: row["count"]
+    for row in _my_order_queryset(supplier).order_by().values("status").annotate(count=Count("id"))
+  }
+  rows = [_for_supplier(_order_row(po), po.business, "advance_due_by") for po in orders[:_limit(limit, 10)]]
+  return {
+    "total": orders.count(),
+    "all_orders_by_status": by_status,
+    "note": "Order numbers restart for each buyer, so PO-0001 can come from several buyers.",
+    "showing": len(rows),
+    "orders": rows,
+  }
+
+
+def get_my_order(supplier, po_number, buyer=None):
+  po = _pick_for_buyer(
+    _my_order_queryset(supplier).prefetch_related("items"),
+    po_number, buyer, "purchase order", "list_my_orders",
+  )
+  return _for_supplier(
+    _order_details(po, _supplier_order_next_step), po.business, "advance_due_by", "payments"
+  )
+
+
+def _my_invoice_queryset(supplier):
+  return (
+    Invoice.objects.filter(supplier_profile=supplier)
+    .select_related("business", "supplier_profile", "purchase_order__goods_receipt")
+    .order_by("-created_at")
+  )
+
+
+def list_my_invoices(supplier, status=None, stage=None, buyer=None, limit=10):
+  invoices = _filter_choice(_my_invoice_queryset(supplier), status, Invoice.Status.values)
+  if stage:
+    if stage not in INVOICE_STAGES:
+      raise ToolError(f"stage must be one of: {', '.join(INVOICE_STAGES)}.")
+    invoices = invoices.filter(INVOICE_STAGES[stage])
+  if buyer:
+    invoices = invoices.filter(business__business_name__icontains=buyer)
+
+  waiting = _my_invoice_queryset(supplier).filter(INVOICE_STAGES["ready_to_pay"])
+  rows = [_for_supplier(_invoice_row(inv), inv.business) for inv in invoices[:_limit(limit, 10)]]
+  return {
+    "total": invoices.count(),
+    "balance_due_total": invoices.aggregate(total=_money_sum(F("balance_due")))["total"],
+    "awaiting_buyer_payment_count": waiting.count(),
+    "awaiting_buyer_payment_total": waiting.aggregate(total=_money_sum(F("balance_due")))["total"],
+    "stage_meaning": {
+      "awaiting_goods_receipt": "Dispatched; the buyer has not recorded the goods receipt yet.",
+      "ready_to_pay": "Goods received; waiting for the buyer to pay the balance.",
+      "paid": "Nothing left to be paid.",
+    },
+    "showing": len(rows),
+    "invoices": rows,
+  }
+
+
+def get_my_invoice(supplier, invoice_number, buyer=None):
+  ref = (invoice_number or "").strip()
+  invoices = _my_invoice_queryset(supplier)
+  if ref.upper().startswith("PO-"):
+    po = _pick_for_buyer(_my_order_queryset(supplier), ref, buyer, "purchase order", "list_my_orders")
+    inv = invoices.filter(purchase_order=po).first()
+    if inv is None:
+      raise ToolError(f"No invoice for '{ref}' yet. It is created when the order is marked dispatched.")
+  else:
+    inv = _pick_for_buyer(invoices, ref, buyer, "invoice", "list_my_invoices")
+  return _for_supplier(
+    _invoice_details(inv, _supplier_invoice_next_step), inv.business,
+    "balance_payments", "refunds_to_owner",
+  )
+
+
+def _my_grn_queryset(supplier):
+  return (
+    GoodsReceipt.objects.filter(purchase_order__supplier_profile=supplier)
+    .select_related(
+      "business", "purchase_order__supplier_profile", "purchase_order__invoice",
+      "received_by__profile",
+    )
+    .order_by("-created_at")
+  )
+
+
+def list_my_goods_receipts(supplier, buyer=None, with_issues_only=False, limit=10):
+  receipts = _my_grn_queryset(supplier)
+  if buyer:
+    receipts = receipts.filter(business__business_name__icontains=buyer)
+  if with_issues_only:
+    receipts = receipts.filter(discrepancies__isnull=False).distinct()
+  receipts = receipts.prefetch_related("items", "discrepancies")
+  rows = [
+    _for_supplier(_goods_receipt_row(grn), grn.business, "received_by")
+    for grn in receipts[:_limit(limit, 10)]
+  ]
+  return {
+    "total": receipts.count(),
+    "note": "Goods receipt numbers restart for each buyer.",
+    "showing": len(rows),
+    "goods_receipts": rows,
+  }
+
+
+def get_my_goods_receipt(supplier, grn_number, buyer=None):
+  ref = (grn_number or "").strip()
+  receipts = _my_grn_queryset(supplier)
+  if ref.upper().startswith("PO-"):
+    po = _pick_for_buyer(_my_order_queryset(supplier), ref, buyer, "purchase order", "list_my_orders")
+    grn = receipts.filter(purchase_order=po).first()
+    if grn is None:
+      raise ToolError(f"The buyer has not recorded a goods receipt for '{ref}' yet.")
+  else:
+    grn = _pick_for_buyer(receipts, ref, buyer, "goods receipt", "list_my_goods_receipts")
+  return _for_supplier(
+    _goods_receipt_details(grn, _supplier_invoice_next_step), grn.business,
+    "received_by", "stock_note",
+  )
+
+
+def _payout_details(supplier):
+  account = _related(supplier, "payout_account")
+  if account is None:
+    return {"added": False, "meaning": "Payouts wait on hold until a bank account or UPI ID is added."}
+  return {
+    "added": True,
+    "method": account.get_method_display(),
+    "bank_name": account.bank_name or None,
+    "account_last4": account.account_last4 or None,
+    "upi_id": account.vpa or None,
+  }
+
+
+def list_my_payouts(supplier, status=None, buyer=None, limit=15):
+  payouts = _filter_choice(
+    Payout.objects.filter(supplier_profile=supplier)
+    .select_related("purchase_order__business", "invoice", "supplier_profile")
+    .order_by("-created_at"),
+    status, Payout.Status.values,
+  )
+  debts = SupplierDebt.objects.filter(
+    supplier_profile=supplier, status=SupplierDebt.Status.OPEN
+  ).select_related("purchase_order__business")
+  if buyer:
+    payouts = payouts.filter(purchase_order__business__business_name__icontains=buyer)
+    debts = debts.filter(purchase_order__business__business_name__icontains=buyer)
+
+  by_status = {
+    row["status"]: {"count": row["count"], "amount": row["amount"]}
+    for row in payouts.order_by().values("status").annotate(
+      count=Count("id"), amount=_money_sum(F("amount"))
+    )
+  }
+  rows = [
+    _for_supplier({**_payout_row(p), "meaning": _payout_meaning(p)}, p.purchase_order.business)
+    for p in payouts[:_limit(limit, 15)]
+  ]
+  return {
+    "how_it_works": (
+      "Kosh pays the supplier automatically through RazorpayX: the advance when they mark "
+      "an order dispatched, the balance after the buyer pays it. deducted_amount was held "
+      "back to recover an earlier overpayment; amount is what was actually sent."
+    ),
+    "payout_details": _payout_details(supplier),
+    "total": payouts.count(),
+    "by_status": by_status,
+    "showing": len(rows),
+    "payouts": rows,
+    "amounts_owed_back": [
+      {
+        "purchase_order": d.purchase_order.number,
+        "buyer": d.purchase_order.business.business_name,
+        "amount": d.amount,
+        "recovered_amount": d.recovered_amount,
+        "outstanding": d.outstanding,
+      }
+      for d in debts[:10]
+    ],
+    "owed_back_meaning": DEBT_MEANING,
+  }
+
+
+def get_supplier_overview(supplier):
+  now = timezone.now()
+  invitations = RFQRecipient.objects.filter(supplier_profile=supplier)
+  waiting_rfqs = _waiting_for_response(invitations)
+  quotations = Quotation.objects.filter(supplier_profile=supplier).annotate(
+    order_number=_visible_order_number()
+  )
+  orders = _my_order_queryset(supplier)
+  waiting = _my_invoice_queryset(supplier).filter(INVOICE_STAGES["ready_to_pay"])
+  payouts = Payout.objects.filter(supplier_profile=supplier)
+  active = set(payouts.filter(status__in=Payout.ACTIVE).values_list("purchase_order_id", "kind"))
+  failed = {
+    key for key in payouts.filter(status=Payout.Status.FAILED).values_list("purchase_order_id", "kind")
+    if key not in active
+  }
+  return {
+    "profile": {
+      "company_name": supplier.company_name,
+      "city": supplier.city,
+      "verified": supplier.is_verified,
+      "supply_categories": [c.name for c in supplier.categories.all()],
+      "payout_details_added": _related(supplier, "payout_account") is not None,
+    },
+    "rfqs_waiting_for_response": waiting_rfqs.count(),
+    "rfqs_closing_within_24h_without_quote": waiting_rfqs.filter(
+      rfq__deadline__lte=now + timedelta(hours=24)
+    ).count(),
+    "quotations_waiting_for_buyer_decision": quotations.filter(
+      Q(status=Quotation.Status.SUBMITTED)
+      | Q(status=Quotation.Status.ACCEPTED, order_number__isnull=True)
+    ).count(),
+    "orders_to_dispatch": orders.filter(status=PurchaseOrder.Status.ISSUED).count(),
+    "orders_to_dispatch_past_delivery_date": orders.filter(
+      status=PurchaseOrder.Status.ISSUED, delivery_date__lt=timezone.localdate()
+    ).count(),
+    "orders_on_the_way": orders.filter(status=PurchaseOrder.Status.DISPATCHED).count(),
+    "late_shipments": orders.filter(
+      status=PurchaseOrder.Status.DISPATCHED,
+      shipment__expected_delivery_date__gt=F("delivery_date"),
+    ).count(),
+    "invoices_awaiting_buyer_payment": waiting.count(),
+    "balance_awaiting_buyer_payment": waiting.aggregate(total=_money_sum(F("balance_due")))["total"],
+    "payouts_on_hold": payouts.filter(status=Payout.Status.ON_HOLD).count(),
+    "payouts_failed": len(failed),
+    "received_last_30_days": payouts.filter(
+      status=Payout.Status.PROCESSED, processed_at__gte=now - timedelta(days=30)
+    ).aggregate(total=_money_sum(F("amount")))["total"],
+    "outstanding_owed_back": SupplierDebt.objects.filter(
+      supplier_profile=supplier, status=SupplierDebt.Status.OPEN
+    ).aggregate(total=_money_sum(F("amount") - F("recovered_amount")))["total"],
+  }
 
 TOOL_FUNCTIONS = {
   "get_app_help": get_app_help,
@@ -1625,8 +2127,181 @@ PRICE_FIELDS = {
 }
 
 
-def declarations_for(is_owner):
-  if is_owner:
+SUPPLIER_TOOL_FUNCTIONS = {
+  "get_app_help": get_app_help,
+  "get_supplier_overview": get_supplier_overview,
+  "list_my_rfqs": list_my_rfqs,
+  "get_my_rfq": get_my_rfq,
+  "list_my_quotations": list_my_quotations,
+  "list_my_orders": list_my_orders,
+  "get_my_order": get_my_order,
+  "list_my_invoices": list_my_invoices,
+  "get_my_invoice": get_my_invoice,
+  "list_my_goods_receipts": list_my_goods_receipts,
+  "get_my_goods_receipt": get_my_goods_receipt,
+  "list_my_payouts": list_my_payouts,
+}
+
+_BUYER = {"type": "STRING", "description": "Buyer business name (partial match)."}
+
+SUPPLIER_TOOL_DECLARATIONS = [
+  TOOL_DECLARATIONS[0],
+  {
+    "name": "get_supplier_overview",
+    "description": (
+      "One-call summary for this supplier: profile and verification, RFQs waiting for a "
+      "response, quotations waiting for a decision, orders to dispatch or on the way, "
+      "balances waiting for buyer payment, payouts on hold or failed, amounts owed back. "
+      "Use for broad questions like 'what needs my attention'."
+    ),
+  },
+  {
+    "name": "list_my_rfqs",
+    "description": (
+      "RFQs buyers sent to this supplier with buyer, deadline, items, whether they can "
+      "still quote and the next step."
+    ),
+    "parameters": {
+      "type": "OBJECT",
+      "properties": {
+        "status": {"type": "STRING", "enum": ["sent", "viewed", "quoted", "declined"]},
+        "open_only": {"type": "BOOLEAN", "description": "Only RFQs still open for quotes."},
+        "buyer": _BUYER,
+        "limit": _LIMIT,
+      },
+    },
+  },
+  {
+    "name": "get_my_rfq",
+    "description": (
+      "ONE RFQ sent to this supplier: requested items, deadline, buyer notes, next step "
+      "and this supplier's own quotation with per-item prices."
+    ),
+    "parameters": {
+      "type": "OBJECT",
+      "properties": {"rfq_number": {"type": "STRING", "description": "e.g. RFQ-0003"}, "buyer": _BUYER},
+      "required": ["rfq_number"],
+    },
+  },
+  {
+    "name": "list_my_quotations",
+    "description": "This supplier's quotations with buyer, status, totals, items and the purchase order if accepted.",
+    "parameters": {
+      "type": "OBJECT",
+      "properties": {
+        "status": {"type": "STRING", "enum": ["submitted", "accepted", "rejected", "withdrawn"]},
+        "buyer": _BUYER,
+        "limit": _LIMIT,
+      },
+    },
+  },
+  {
+    "name": "list_my_orders",
+    "description": (
+      "Purchase orders issued to this supplier with buyer, status, delivery date and "
+      "advance. status issued = to dispatch, dispatched = on the way."
+    ),
+    "parameters": {
+      "type": "OBJECT",
+      "properties": {
+        "status": {"type": "STRING", "enum": ["issued", "dispatched", "partially_received", "received"]},
+        "buyer": _BUYER,
+        "limit": _LIMIT,
+      },
+    },
+  },
+  {
+    "name": "get_my_order",
+    "description": (
+      "ONE purchase order: items (ordered, shipped, received, rejected), shipment, goods "
+      "receipt issues, invoice, payouts and the next step."
+    ),
+    "parameters": {
+      "type": "OBJECT",
+      "properties": {"po_number": {"type": "STRING", "description": "e.g. PO-0003"}, "buyer": _BUYER},
+      "required": ["po_number"],
+    },
+  },
+  {
+    "name": "list_my_invoices",
+    "description": (
+      "This supplier's invoices with buyer, stage, balance due, advance applied, credit "
+      "and refund due, plus how much is waiting for buyer payment."
+    ),
+    "parameters": {
+      "type": "OBJECT",
+      "properties": {
+        "status": {"type": "STRING", "enum": ["unpaid", "paid"]},
+        "stage": {
+          "type": "STRING",
+          "enum": ["awaiting_goods_receipt", "ready_to_pay", "paid"],
+          "description": "ready_to_pay = goods received, waiting for the buyer to pay.",
+        },
+        "buyer": _BUYER,
+        "limit": _LIMIT,
+      },
+    },
+  },
+  {
+    "name": "get_my_invoice",
+    "description": (
+      "ONE invoice: items, totals, how the balance was worked out, next step, payouts and "
+      "any amount owed back. Accepts the invoice or PO number."
+    ),
+    "parameters": {
+      "type": "OBJECT",
+      "properties": {
+        "invoice_number": {"type": "STRING", "description": "e.g. INV-0002 or PO-0003."},
+        "buyer": _BUYER,
+      },
+      "required": ["invoice_number"],
+    },
+  },
+  {
+    "name": "list_my_goods_receipts",
+    "description": "Goods receipts buyers recorded for this supplier's deliveries: units received, rejected, issues and credit.",
+    "parameters": {
+      "type": "OBJECT",
+      "properties": {
+        "buyer": _BUYER,
+        "with_issues_only": {"type": "BOOLEAN"},
+        "limit": _LIMIT,
+      },
+    },
+  },
+  {
+    "name": "get_my_goods_receipt",
+    "description": "ONE goods receipt: per item dispatched, received, rejected, issues, credit, and the invoice effect.",
+    "parameters": {
+      "type": "OBJECT",
+      "properties": {
+        "grn_number": {"type": "STRING", "description": "e.g. GRN-0004 or PO-0003."},
+        "buyer": _BUYER,
+      },
+      "required": ["grn_number"],
+    },
+  },
+  {
+    "name": "list_my_payouts",
+    "description": (
+      "Payouts Kosh sent or is sending to this supplier (status, UTR, amounts held back), "
+      "their payout details and amounts they owe back."
+    ),
+    "parameters": {
+      "type": "OBJECT",
+      "properties": {
+        "status": {"type": "STRING", "enum": ["on_hold", "pending", "processing", "processed", "failed"]},
+        "buyer": _BUYER,
+        "limit": _LIMIT,
+      },
+    },
+  },
+]
+
+def declarations_for(role):
+  if role == "supplier":
+    return SUPPLIER_TOOL_DECLARATIONS
+  if role == "owner":
     return TOOL_DECLARATIONS
   return [d for d in TOOL_DECLARATIONS if d["name"] not in OWNER_ONLY_TOOLS]
 
@@ -1639,20 +2314,21 @@ def redact_prices(data):
   return data
 
 
-def execute_tool(name, args, business, is_owner=True):
-  func = TOOL_FUNCTIONS.get(name)
+def execute_tool(name, args, scope, role="owner"):
+  functions = SUPPLIER_TOOL_FUNCTIONS if role == "supplier" else TOOL_FUNCTIONS
+  func = functions.get(name)
   if func is None:
     return {"error": f"Unknown tool '{name}'."}
-  if not is_owner and name in OWNER_ONLY_TOOLS:
+  if role == "employee" and name in OWNER_ONLY_TOOLS:
     return {"error": "Only the business owner can see this information."}
   args = dict(args or {})
   try:
-    inspect.signature(func).bind(business, **args)
+    inspect.signature(func).bind(scope, **args)
   except TypeError:
     return {"error": f"Invalid arguments for '{name}': {sorted(args)}."}
   try:
-    result = func(business, **args)
+    result = func(scope, **args)
   except ToolError as exc:
     return {"error": str(exc)}
   result = to_json_safe(result)
-  return result if is_owner else redact_prices(result)
+  return redact_prices(result) if role == "employee" else result
