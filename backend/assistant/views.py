@@ -10,11 +10,11 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 
 from accounts.pagination import StandardPagination
-from accounts.permissions import HasBusinessAccess
 from accounts.responses import error_response, success_response, validation_error_response
 
 from .llm import AssistantError, Attachment, GeminiAgent
 from .models import ChatConversation, ChatMessage
+from .permissions import HasAssistantAccess
 from .throttles import AssistantBurstThrottle, AssistantDailyThrottle
 from .serializers import (
   ChatConversationDetailSerializer,
@@ -32,6 +32,8 @@ def get_agent():
 
 
 def user_conversations(request):
+  if request.supplier is not None:
+    return ChatConversation.objects.filter(supplier_profile=request.supplier, user=request.user)
   return ChatConversation.objects.filter(business=request.business, user=request.user)
 
 
@@ -43,6 +45,8 @@ class ConversationPagination(StandardPagination):
   tags=["Assistant"],
   summary="Ask the AI assistant a question about your business data",
   description=(
+    "Works for business owners, employees and suppliers; suppliers get answers about "
+    "their own RFQs, quotations, orders, invoices and payouts. "
     "Send `message`. Leave out `conversation_id` to start a new conversation; send the "
     "returned `conversation_id` with follow-up questions to keep context. To ask about a "
     "file, send multipart/form-data with `attachment` (one JPG/PNG/WEBP image up to 5 MB "
@@ -55,7 +59,7 @@ class ConversationPagination(StandardPagination):
   responses={200: ChatReplySerializer},
 )
 class ChatApi(APIView):
-  permission_classes = [IsAuthenticated, HasBusinessAccess]
+  permission_classes = [IsAuthenticated, HasAssistantAccess]
   throttle_classes = [AssistantBurstThrottle, AssistantDailyThrottle]
   parser_classes = [MultiPartParser, FormParser, JSONParser]
 
@@ -81,7 +85,7 @@ class ChatApi(APIView):
     try:
       result = get_agent().run(
         business=request.business, user=request.user, history=history, message=message,
-        attachment=attachment,
+        attachment=attachment, supplier=request.supplier,
       )
     except AssistantError as exc:
       return error_response(exc.message, exc.code, status=exc.status)
@@ -89,7 +93,7 @@ class ChatApi(APIView):
     with transaction.atomic():
       if conversation is None:
         conversation = ChatConversation.objects.create(
-          business=request.business, user=request.user,
+          business=request.business, supplier_profile=request.supplier, user=request.user,
           title=(message or (upload.name if upload else ""))[:60],
         )
       ChatMessage.objects.create(
@@ -117,7 +121,7 @@ class ChatApi(APIView):
 @extend_schema(tags=["Assistant"], summary="List your assistant conversations",
                responses={200: ChatConversationSerializer(many=True)})
 class ConversationListApi(APIView):
-  permission_classes = [IsAuthenticated, HasBusinessAccess]
+  permission_classes = [IsAuthenticated, HasAssistantAccess]
 
   def get(self, request):
     paginator = ConversationPagination()
@@ -127,7 +131,7 @@ class ConversationListApi(APIView):
 
 @extend_schema(tags=["Assistant"], responses={200: ChatConversationDetailSerializer})
 class ConversationDetailApi(APIView):
-  permission_classes = [IsAuthenticated, HasBusinessAccess]
+  permission_classes = [IsAuthenticated, HasAssistantAccess]
 
   def get_conversation(self, request, pk):
     return get_object_or_404(user_conversations(request), pk=pk)

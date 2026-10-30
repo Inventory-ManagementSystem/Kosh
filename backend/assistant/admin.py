@@ -15,8 +15,8 @@ class ChatMessageInline(admin.TabularInline):
 
 @admin.register(ChatConversation)
 class ChatConversationAdmin(admin.ModelAdmin):
-  list_display = ["title", "business", "user", "updated_at"]
+  list_display = ["title", "business", "supplier_profile", "user", "updated_at"]
   list_filter = ["business"]
   search_fields = ["title", "user__email"]
-  readonly_fields = ["business", "user", "created_at", "updated_at"]
+  readonly_fields = ["business", "supplier_profile", "user", "created_at", "updated_at"]
   inlines = [ChatMessageInline]
