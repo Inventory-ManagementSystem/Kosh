@@ -197,8 +197,11 @@ PRODUCT_WRITE_EXAMPLE = {
 
 QUANTITY_NOT_ALLOWED = ("Quantity Not Allowed", {"quantity": [QUANTITY_ERROR]})
 
+TAG_1=["Products"]
+
 product_list_create_docs = extend_schema_view(
   get=extend_schema(
+    tags=TAG_1,
     operation_id="inventory_products_list",
     summary="List Products",
     description=(
@@ -215,6 +218,7 @@ product_list_create_docs = extend_schema_view(
     },
   ),
   post=extend_schema(
+    tags=TAG_1,
     summary="Create Product",
     description=(
       "Creates a product in the logged-in user's business. The business is set by "
@@ -255,6 +259,7 @@ product_list_create_docs = extend_schema_view(
 
 product_detail_docs = extend_schema_view(
   get=extend_schema(
+    tags=TAG_1,
     summary="Get Product",
     responses={
       200: resp("Product details.",
@@ -266,6 +271,7 @@ product_detail_docs = extend_schema_view(
     },
   ),
   put=extend_schema(
+    tags=TAG_1,
     summary="Replace Product",
     description=(
       "Full update. `name`, `sku` and `price` are required. If `is_active` is "
@@ -292,6 +298,7 @@ product_detail_docs = extend_schema_view(
     },
   ),
   patch=extend_schema(
+    tags=TAG_1,
     summary="Update Product",
     description=(
       "Partial update. Send only the fields you want to change. Setting "
@@ -322,6 +329,7 @@ product_detail_docs = extend_schema_view(
     },
   ),
   delete=extend_schema(
+    tags=TAG_1,
     summary="Delete Product",
     description=(
       "If the product has no dispatch, RFQs, purchase order or invoice history, it is "
@@ -351,6 +359,7 @@ product_detail_docs = extend_schema_view(
 
 product_adjust_stock_docs = extend_schema_view(
   post=extend_schema(
+    tags=TAG_1,
     summary="Adjust Product Stock",
     description=(
       "Corrects a product's stock up or down. `change` is a whole number between "
@@ -404,9 +413,12 @@ product_adjust_stock_docs = extend_schema_view(
   ),
 )
 
+TAG_2=["Category"]
+
 def name_only_crud_docs(label, plural, serializer, example, delete_note):
   list_create = extend_schema_view(
     get=extend_schema(
+      tags=TAG_2,
       operation_id=f"inventory_{plural.lower()}_list",
       summary=f"List {plural}",
       description=f"Returns all {plural.lower()} of the logged-in user's business. Not paginated.",
@@ -419,6 +431,7 @@ def name_only_crud_docs(label, plural, serializer, example, delete_note):
       },
     ),
     post=extend_schema(
+      tags=TAG_2,
       summary=f"Create {label}",
       description=(
         f"Creates a {label.lower()} in the logged-in user's business. The name must be "
@@ -445,6 +458,7 @@ def name_only_crud_docs(label, plural, serializer, example, delete_note):
 
   detail = extend_schema_view(
     get=extend_schema(
+      tags=TAG_2,
       summary=f"Get {label}",
       responses={
         200: resp(f"{label} details.",
@@ -456,6 +470,7 @@ def name_only_crud_docs(label, plural, serializer, example, delete_note):
       },
     ),
     put=extend_schema(
+      tags=TAG_2,
       summary=f"Replace {label}",
       description="Full update. `name` is required. " + OWNER_NOTE,
       request=serializer,
@@ -473,6 +488,7 @@ def name_only_crud_docs(label, plural, serializer, example, delete_note):
       },
     ),
     patch=extend_schema(
+      tags=TAG_2,
       summary=f"Update {label}",
       description="Partial update. Send only the fields you want to change. " + OWNER_NOTE,
       request=serializer,
@@ -493,6 +509,7 @@ def name_only_crud_docs(label, plural, serializer, example, delete_note):
       },
     ),
     delete=extend_schema(
+      tags=TAG_2,
       summary=f"Delete {label}",
       description=f"Permanently deletes the {label.lower()}. {delete_note} {OWNER_NOTE}",
       responses={
@@ -512,8 +529,11 @@ category_list_create_docs, category_detail_docs = name_only_crud_docs(
   "Products in this category are kept and become uncategorised.",
 )
 
+TAG_3=["Warehouse"]
+
 warehouse_docs = extend_schema_view(
   get=extend_schema(
+    tags=TAG_3,
     summary="Get Warehouse",
     description=(
       "Returns the business's warehouse. Every business has exactly one "
@@ -529,6 +549,7 @@ warehouse_docs = extend_schema_view(
     },
   ),
   put=extend_schema(
+    tags=TAG_3,
     summary="Replace Warehouse Details",
     description="Full update of the warehouse details. `name` is required. " + OWNER_NOTE,
     request=WarehouseSerializer,
@@ -551,6 +572,7 @@ warehouse_docs = extend_schema_view(
     },
   ),
   patch=extend_schema(
+    tags=TAG_3,
     summary="Update Warehouse Details",
     description="Partial update. Send only the fields you want to change. " + OWNER_NOTE,
     request=WarehouseSerializer,
@@ -608,8 +630,11 @@ OUTLET_NOTE = (
   "only the owner can edit or delete them."
 )
 
+TAG_4=["Outlets"]
+
 outlet_list_create_docs = extend_schema_view(
   get=extend_schema(
+    tags=TAG_4,
     operation_id="inventory_outlets_list",
     summary="List Outlets",
     description=(
@@ -631,6 +656,7 @@ outlet_list_create_docs = extend_schema_view(
     },
   ),
   post=extend_schema(
+    tags=TAG_4,
     summary="Create Outlet",
     description=(
       "Creates an outlet in the logged-in user's business. The name must be unique "
@@ -660,6 +686,7 @@ outlet_list_create_docs = extend_schema_view(
 
 outlet_detail_docs = extend_schema_view(
   get=extend_schema(
+    tags=TAG_4,
     summary="Get Outlet",
     responses={
       200: resp("Outlet details.",
@@ -671,6 +698,7 @@ outlet_detail_docs = extend_schema_view(
     },
   ),
   put=extend_schema(
+    tags=TAG_4,
     summary="Replace Outlet",
     description="Full update. `name` is required. " + OWNER_NOTE,
     request=OutletSerializer,
@@ -688,6 +716,7 @@ outlet_detail_docs = extend_schema_view(
     },
   ),
   patch=extend_schema(
+    tags=TAG_4,
     summary="Update Outlet",
     description=(
       "Partial update. Send only the fields you want to change. Set `is_active` to "
@@ -712,6 +741,7 @@ outlet_detail_docs = extend_schema_view(
     },
   ),
   delete=extend_schema(
+    tags=TAG_4,
     summary="Delete Outlet",
     description=(
       "Permanently deletes an outlet that has never received a dispatch. If it has "
@@ -745,8 +775,11 @@ DISPATCH_LIST_PARAMS = [
                    description="Dispatches per page."),
 ]
 
+TAG_5=["Dispatches"]
+
 dispatch_list_create_docs = extend_schema_view(
   get=extend_schema(
+    tags=TAG_5,
     operation_id="inventory_dispatches_list",
     summary="List Dispatches",
     description=(
@@ -770,6 +803,7 @@ dispatch_list_create_docs = extend_schema_view(
     },
   ),
   post=extend_schema(
+    tags=TAG_5,
     summary="Record Dispatch",
     description=(
       "Sends stock from the warehouse to an outlet. Creates one dispatch note "
@@ -816,6 +850,7 @@ dispatch_list_create_docs = extend_schema_view(
 
 dispatch_detail_docs = extend_schema_view(
   get=extend_schema(
+    tags=TAG_5,
     summary="Get Dispatch",
     responses={
       200: resp("Dispatch details.",
@@ -842,8 +877,11 @@ MOVEMENT_EXAMPLE = {
   "created_at": "2026-10-10T09:30:00Z",
 }
 
+TAG_6=["Stock Movements"]
+
 stock_movement_list_docs = extend_schema_view(
   get=extend_schema(
+    tags=TAG_6,
     operation_id="inventory_stock_movements_list",
     summary="List Stock Movements",
     description=(

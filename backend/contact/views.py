@@ -12,6 +12,8 @@ from accounts.swagger import err_example, ok_example, resp
 from .serializers import ContactSerializer
 from .tasks import send_contact_email
 
+from accounts.recaptcha import verify_recaptcha
+
 logger = logging.getLogger(__name__)
 
 THANKS = "Thanks! We've received your message."
@@ -49,6 +51,13 @@ class ContactApi(APIView):
     },
   )
   def post(self, request):
+
+    if not verify_recaptcha(request.data.get("recaptcha_token"), "contact_form"):
+      return error_response(
+        "reCAPTCHA verification failed. Please try again.", "RECAPTCHA_FAILED",
+        status=status.HTTP_400_BAD_REQUEST,
+      )
+
     serializer = ContactSerializer(data=request.data)
     if not serializer.is_valid():
       return validation_error_response(serializer)

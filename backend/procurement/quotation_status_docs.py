@@ -8,6 +8,7 @@ from .SwaggerDocs import (
   NOT_SUPPLIER_RESPONSE,
   PAGE_PARAMETERS,
   QUOTATION_EXAMPLE,
+  TAGS_2,
 )
 
 PO_ID = "2f6b9d04-7c1e-4a83-b5f2-9e0d3a8c6b17"
@@ -148,6 +149,7 @@ QUOTATION_STATUS_NOTE = (
 
 supplier_quotation_status_list_docs = extend_schema_view(
   get=extend_schema(
+    tags=TAGS_2,
     operation_id="procurement_supplier_quotations_list",
     summary="Supplier: List My Quotations",
     description=QUOTATION_STATUS_NOTE,
