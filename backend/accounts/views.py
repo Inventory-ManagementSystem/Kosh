@@ -2,6 +2,7 @@ from django.shortcuts import render
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
+from .recaptcha import verify_recaptcha
 from .models import Business, Profile, Employee, EmployeeInvite
 from suppliers.models import SupplierProfile
 from .utils import get_role, get_owned_business, invite_cutoff, purge_expired_invites, INVITE_TTL, get_onboarding_state
@@ -197,6 +198,12 @@ class RegisterApi(APIView):
     authentication_classes = []
     throttle_classes=[RegisterRateThrottle]
     def post(self, request):
+        if not verify_recaptcha(request.data.get("recaptcha_token"), "signup"):
+            return error_response(
+                "reCAPTCHA verification failed. Please try again.", "RECAPTCHA_FAILED",
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         serializer = RegisterSerializer(data=request.data)
 
         if not serializer.is_valid():
