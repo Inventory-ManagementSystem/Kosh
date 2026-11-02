@@ -416,6 +416,13 @@ class LoginApi(APIView):
   authentication_classes = []
   throttle_classes=[LoginRateThrottle]
   def post(self,request):
+
+    if not verify_recaptcha(request.data.get("recaptcha_token"), "login"):
+      return error_response(
+        "reCAPTCHA verification failed. Please try again.", "RECAPTCHA_FAILED",
+        status=status.HTTP_400_BAD_REQUEST,
+      )
+
     serializer = LoginSerializer(data=request.data)
     if serializer.is_valid():
       data=serializer.validated_data
