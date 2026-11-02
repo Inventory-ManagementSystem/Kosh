@@ -205,6 +205,13 @@ PAGE_PARAMETERS = [
 
 TAGS_RFQ=["Owner RFQs"]
 TAGS_RFQ_SUPP=["Supplier RFQs"]
+TAGS_1=["Alerts"]
+TAGS_2=["Quotations"]
+TAGS_3=["Orders"]
+TAGS_4=["Invoice"]
+TAGS_5=["Advance Payment"]
+TAGS_6=["Payout and Refunds"]
+TAGS_7=["Toggle Settings"]
 
 rfq_list_docs = extend_schema_view(
   get=extend_schema(
@@ -379,6 +386,7 @@ rfq_summary_docs = extend_schema_view(
 
 reorder_alert_list_docs = extend_schema_view(
   get=extend_schema(
+    tags=TAGS_1,
     operation_id="procurement_alerts_list",
     summary="List Active Alerts",
     description=(
@@ -639,6 +647,7 @@ supplier_rfq_detail_docs = extend_schema_view(
 
 supplier_quotation_docs = extend_schema_view(
   get=extend_schema(
+    tags=TAGS_2,
     operation_id="procurement_supplier_quotation_retrieve",
     summary="Supplier: Get My Quotation",
     description=(
@@ -660,6 +669,7 @@ supplier_quotation_docs = extend_schema_view(
     },
   ),
   put=extend_schema(
+    tags=TAGS_2,
     operation_id="procurement_supplier_quotation_submit",
     summary="Supplier: Post or Edit Quotation",
     description=(
@@ -767,6 +777,7 @@ supplier_quotation_docs = extend_schema_view(
     },
   ),
   delete=extend_schema(
+    tags=TAGS_2,
     operation_id="procurement_supplier_quotation_withdraw",
     summary="Supplier: Withdraw Quotation",
     description=(
@@ -795,6 +806,7 @@ supplier_quotation_docs = extend_schema_view(
 
 supplier_rfq_decline_docs = extend_schema_view(
   post=extend_schema(
+    tags=TAGS_RFQ_SUPP,
     operation_id="procurement_supplier_rfqs_decline",
     summary="Supplier: Decline RFQ",
     description=(
@@ -839,6 +851,7 @@ RANKING_NOTE = (
 
 rfq_quotation_list_docs = extend_schema_view(
   get=extend_schema(
+    tags=TAGS_2,
     operation_id="procurement_rfqs_quotations_list",
     summary="List Quotations for RFQ",
     description=(
@@ -940,6 +953,7 @@ ALERT_NOT_OPEN_EXAMPLE_TEXT = "The alert for Amul Milk 1L already has an RFQ or 
 
 reorder_alert_create_rfq_docs = extend_schema_view(
   post=extend_schema(
+    tags=TAGS_1,
     operation_id="procurement_alerts_create_rfq",
     summary="Create RFQ From Alert",
     description=(
@@ -1019,6 +1033,7 @@ reorder_alert_create_rfq_docs = extend_schema_view(
 
 reorder_alert_dismiss_docs = extend_schema_view(
   post=extend_schema(
+    tags=TAGS_1,
     operation_id="procurement_alerts_dismiss",
     summary="Dismiss Alert",
     description=(
@@ -1052,6 +1067,7 @@ MULTI_ITEM_RFQ_EXAMPLE = {**RFQ_DETAIL_EXAMPLE, "auto_generated": False}
 
 reorder_alert_bulk_create_rfq_docs = extend_schema_view(
   post=extend_schema(
+    tags=TAGS_1,
     operation_id="procurement_alerts_bulk_create_rfq",
     summary="Create RFQs From Several Alerts",
     description=(
@@ -1131,6 +1147,7 @@ reorder_alert_bulk_create_rfq_docs = extend_schema_view(
 
 reorder_alert_refresh_docs = extend_schema_view(
   post=extend_schema(
+    tags=TAGS_1,
     operation_id="procurement_alerts_refresh",
     summary="Refresh Alerts",
     description=(
@@ -1198,6 +1215,7 @@ QUOTATION_NOT_FOUND_RESPONSE = resp(
  
 po_accept_docs = extend_schema_view(
   post=extend_schema(
+    tags=TAGS_2,
     operation_id="procurement_quotations_accept",
     summary="Accept Quotation",
     description=(
@@ -1281,6 +1299,7 @@ PURCHASE_ORDER_CANCELLED_EXAMPLE = {
 
 po_cancel_docs = extend_schema_view(
   post=extend_schema(
+    tags=TAGS_3,
     operation_id="procurement_orders_cancel",
     summary="Cancel Unpaid Order",
     description=(
@@ -1406,6 +1425,7 @@ PO_FIELDS_NOTE = (
 
 po_list_docs = extend_schema_view(
   get=extend_schema(
+    tags=TAGS_3,
     operation_id="procurement_orders_list",
     summary="List Orders",
     description=(
@@ -1437,6 +1457,7 @@ po_list_docs = extend_schema_view(
 
 po_detail_docs = extend_schema_view(
   get=extend_schema(
+    tags=TAGS_3,
     operation_id="procurement_orders_retrieve",
     summary="Get Order",
     description=(
@@ -1466,6 +1487,7 @@ SUPPLIER_PO_NOTE = (
 
 supplier_po_list_docs = extend_schema_view(
   get=extend_schema(
+    tags=TAGS_3,
     operation_id="procurement_supplier_orders_list",
     summary="Supplier: List My Orders",
     description=(
@@ -1504,6 +1526,7 @@ supplier_po_list_docs = extend_schema_view(
 
 supplier_po_detail_docs = extend_schema_view(
   get=extend_schema(
+    tags=TAGS_3,
     operation_id="procurement_supplier_orders_retrieve",
     summary="Supplier: Get Order",
     description=(
@@ -1569,6 +1592,7 @@ ORDER_NOT_FOUND_FOR_SUPPLIER_RESPONSE = resp(
 
 supplier_po_dispatch_docs = extend_schema_view(
   post=extend_schema(
+    tags=TAGS_3,
     operation_id="procurement_supplier_orders_dispatch",
     summary="Supplier: Mark Order Dispatched",
     description=(
@@ -1745,6 +1769,7 @@ STATUS_FILTER_PARAMETER = OpenApiParameter(
 
 invoice_list_docs = extend_schema_view(
   get=extend_schema(
+    tags=TAGS_4,
     operation_id="procurement_invoices_list",
     summary="List Invoices",
     description=(
@@ -1767,6 +1792,7 @@ invoice_list_docs = extend_schema_view(
 
 invoice_detail_docs = extend_schema_view(
   get=extend_schema(
+    tags=TAGS_4,
     operation_id="procurement_invoices_retrieve",
     summary="Get Invoice",
     description=(
@@ -1789,6 +1815,7 @@ invoice_detail_docs = extend_schema_view(
 
 supplier_invoice_list_docs = extend_schema_view(
   get=extend_schema(
+    tags=TAGS_4,
     operation_id="procurement_supplier_invoices_list",
     summary="Supplier: List My Invoices",
     description=(
@@ -1811,6 +1838,7 @@ supplier_invoice_list_docs = extend_schema_view(
 
 supplier_invoice_detail_docs = extend_schema_view(
   get=extend_schema(
+    tags=TAGS_4,
     operation_id="procurement_supplier_invoices_retrieve",
     summary="Supplier: Get Invoice",
     description=(
@@ -1906,6 +1934,7 @@ ADVANCE_STATE_CONFLICT = (
 
 po_advance_docs = extend_schema_view(
   get=extend_schema(
+    tags=TAGS_5,
     operation_id="procurement_purchase_orders_advance_status",
     summary="Advance Payment Status",
     description=(
@@ -1940,6 +1969,7 @@ po_advance_docs = extend_schema_view(
     },
   ),
   post=extend_schema(
+    tags=TAGS_5,
     operation_id="procurement_purchase_orders_advance_start",
     summary="Start Advance Payment",
     description=(
@@ -1970,6 +2000,7 @@ po_advance_docs = extend_schema_view(
 
 po_advance_verify_docs = extend_schema_view(
   post=extend_schema(
+    tags=TAGS_5,
     operation_id="procurement_purchase_orders_advance_verify",
     summary="Verify Advance Payment",
     description=(
@@ -2089,6 +2120,7 @@ PAYOUT_STATUS_PARAMETER = OpenApiParameter(
 
 payout_list_docs = extend_schema_view(
   get=extend_schema(
+    tags=TAGS_6,
     operation_id="procurement_payouts_list",
     summary="List Supplier Payouts",
     description=(
@@ -2111,6 +2143,7 @@ payout_list_docs = extend_schema_view(
 
 supplier_payout_list_docs = extend_schema_view(
   get=extend_schema(
+    tags=TAGS_6,
     operation_id="procurement_supplier_payouts_list",
     summary="Supplier: List My Payouts",
     description=(
@@ -2153,6 +2186,7 @@ SETTINGS_NOTE = (
 
 procurement_settings_docs = extend_schema_view(
   get=extend_schema(
+    tags=TAGS_7,
     operation_id="procurement_settings_retrieve",
     summary="Get Procurement Settings",
     description=(
@@ -2169,6 +2203,7 @@ procurement_settings_docs = extend_schema_view(
     },
   ),
   patch=extend_schema(
+    tags=TAGS_7,
     operation_id="procurement_settings_update",
     summary="Update Procurement Settings",
     description=(
@@ -2243,6 +2278,7 @@ BALANCE_NOTE = (
 
 invoice_balance_docs = extend_schema_view(
   get=extend_schema(
+    tags=TAGS_4,
     operation_id="procurement_invoices_balance_status",
     summary="Invoice Balance Status",
     description=(
@@ -2259,6 +2295,7 @@ invoice_balance_docs = extend_schema_view(
     },
   ),
   post=extend_schema(
+    tags=TAGS_4,
     operation_id="procurement_invoices_balance_start",
     summary="Start Balance Payment",
     description=(
@@ -2296,6 +2333,7 @@ invoice_balance_docs = extend_schema_view(
 
 invoice_balance_verify_docs = extend_schema_view(
   post=extend_schema(
+    tags=TAGS_4,
     operation_id="procurement_invoices_balance_verify",
     summary="Verify Balance Payment",
     description=(
@@ -2328,6 +2366,7 @@ invoice_balance_verify_docs = extend_schema_view(
 
 supplier_debt_list_docs = extend_schema_view(
   get=extend_schema(
+    tags=TAGS_6,
     operation_id="procurement_supplier_debts_list",
     summary="Supplier: List Money Owed Back",
     description=(
