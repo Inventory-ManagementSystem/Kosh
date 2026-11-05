@@ -28,7 +28,7 @@ from .models import (
 )
 from .services import calculate_totals
 
-
+from .price_comp import compare_price
 
 
 class RFQItemSerializer(serializers.ModelSerializer):
@@ -317,6 +317,16 @@ QUOTATION_FIELDS = [
   "valid_until", "notes", "submitted_at", "updated_at",
 ]
 
+class OwnerQuotationItemSerializer(QuotationItemSerializer):
+  price_check = serializers.SerializerMethodField()
+
+  class Meta(QuotationItemSerializer.Meta):
+    fields = QuotationItemSerializer.Meta.fields + ["price_check"]
+    read_only_fields = fields
+
+  def get_price_check(self, obj) -> dict | None:
+    history = self.context.get("price_history", {}).get(obj.rfq_item.product_id)
+    return compare_price(obj.unit_price, history)
 
 class QuotationSerializer(serializers.ModelSerializer):
   items = QuotationItemSerializer(many=True, read_only=True)
@@ -356,13 +366,19 @@ class OwnerQuotationSerializer(QuotationSerializer):
   score = serializers.SerializerMethodField()
   breakdown = serializers.SerializerMethodField()
   badges = serializers.SerializerMethodField()
+  reliability = serializers.SerializerMethodField()
+  items = OwnerQuotationItemSerializer(many=True, read_only=True)
 
   class Meta(QuotationSerializer.Meta):
     fields = QUOTATION_FIELDS + [
       "supplier_profile_id", "company_name", "city", "supplier_verified", "source",
-      "rank", "score", "breakdown", "badges",
+      "rank", "score", "breakdown", "badges", "reliability",
     ]
     read_only_fields = fields
+
+  def get_reliability(self, obj) -> dict | None:
+    info = self._info(obj)
+    return info["reliability"] if info else None
 
   def _info(self, obj):
     return self.context.get("ranking", {}).get(obj.pk)
