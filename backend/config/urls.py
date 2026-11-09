@@ -44,4 +44,5 @@ urlpatterns = [
     path('notifications/', include('notifications.urls')),
     path('contact/', include('contact.urls')),
     path('assistant/', include('assistant.urls')),
+    path('search/', include('search.urls')),
 ]

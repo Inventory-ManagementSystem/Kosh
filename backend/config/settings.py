@@ -103,6 +103,7 @@ INSTALLED_APPS = [
     'procurement',
     'assistant.apps.AssistantConfig',
     'contact',
+    'search',
 
 ]
 
