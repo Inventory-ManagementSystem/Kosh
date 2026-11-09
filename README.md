@@ -299,7 +299,7 @@ Each quotation comes back with `rank`, `score`, a per-parameter `breakdown` and 
 | `Sushant` | Backend: Django |
 | `Shabd Rastogi` | Backend: Django |
 | `Manasvi Kapoor` | Frontend: React |
-| `Aryan Gupta` | designer: React |
+| `Aryan Gupta` | designer |
 
 ---
 
