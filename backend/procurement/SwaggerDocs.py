@@ -519,18 +519,40 @@ SUPPLIER_RFQ_DETAIL_EXAMPLE = {
 OWNER_QUOTATION_EXAMPLE = {
   **QUOTATION_EXAMPLE,
   "supplier_profile_id": "2c9f6a85-e7d1-4b03-9a58-4f1d8e3b6c70",
+  "items": [
+    {
+      **QUOTATION_EXAMPLE["items"][0],
+      "price_check": {
+        "tag": "above_last",
+        "label": "5% above your last purchase",
+        "last_price": "40.00",
+        "vs_last_pct": 5.0,
+        "avg_90d": "40.50",
+        "low_90d": "39.00",
+        "purchases_90d": 3,
+      },
+    },
+    {**QUOTATION_EXAMPLE["items"][1], "price_check": None},
+  ],
   "company_name": "Sharma Traders",
   "city": "Ghaziabad",
   "supplier_verified": True,
   "source": "own",
-  "rank": 1,
-  "score": 97.8,
+    "rank": 1,
+  "score": 94.1,
   "badges": ["recommended", "cheapest", "fastest"],
   "breakdown": {
-    "price": {"score": 100.0, "weight": 58.8},
-    "delivery": {"score": 100.0, "weight": 29.4},
-    "payment": {"score": 81.1, "weight": 11.8},
-    "reliability": {"score": None, "weight": 0.0},
+    "price": {"score": 100.0, "weight": 50.0},
+    "delivery": {"score": 100.0, "weight": 25.0},
+    "payment": {"score": 81.1, "weight": 10.0},
+    "reliability": {"score": 73.0, "weight": 15.0},
+  },
+  "reliability": {
+    "score": 73.0,
+    "orders": 8,
+    "on_time_rate": 87.5,
+    "fill_rate": 96.0,
+    "clean_rate": 75.0,
   },
 }
 
@@ -840,13 +862,38 @@ RANKING_NOTE = (
   "on this RFQ: `price` (grand total; the lowest scores 100), `delivery` (days from "
   "the RFQ's creation to the quoted delivery date; the earliest scores 100), "
   "`payment` (a smaller advance scores higher; no advance is 100) and `reliability` "
-  "(the supplier's delivery record; it is left out while nobody has any history). "
+  "(the supplier's delivery record on Kosh, explained below). "
   "Default weights are price 50, delivery 25, payment 10 and reliability 15. A "
   "parameter that can't be scored is skipped and its weight is shared among the "
   "others. `breakdown` shows each parameter's score and its effective weight in "
   "percent. `badges` can include `recommended` (rank 1), `cheapest` and `fastest`. "
+  "Each quotation also carries `reliability`, the record behind that parameter, or "
+  "null if the supplier has no completed orders yet. It holds `score` (0 to 100), "
+  "`orders` (completed orders it is based on) and three rates in percent: "
+  "`on_time_rate`, `fill_rate` (units accepted out of units ordered) and "
+  "`clean_rate` (orders with no shortage or rejected goods). An order counts as "
+  "late when the supplier dispatched it, or gave an expected delivery date, after "
+  "the date promised in the quotation. The score is 40% on-time, 35% fill and 25% "
+  "clean, and is pulled toward a neutral 50 while a supplier has few orders (about "
+  "3 orders before their own record counts as much as the neutral value). A "
+  "supplier with no history is scored a neutral 50 when at least one other "
+  "quotation on this RFQ has history; when none do, the parameter is left out of "
+  "the ranking and `breakdown.reliability.score` is null. "
   "Scores are calculated on every call and change when quotations are added, "
   "revised or withdrawn. The ranking is only a suggestion; the owner decides."
+)
+
+PRICE_CHECK_NOTE = (
+  "Each entry in `items` also has `price_check`, which compares the quoted unit "
+  "price (before GST) with what this business paid for the same product on its "
+  "earlier orders. Only confirmed orders from the last 365 days count, not this "
+  "RFQ's own order. It is null when there is no such order. `last_price` is the "
+  "unit price on the most recent one and `vs_last_pct` is how far the quote is "
+  "above (positive) or below (negative) it. `avg_90d` and `low_90d` cover orders "
+  "in the last 90 days (null when there are none) and `purchases_90d` says how "
+  "many. `tag` is `lowest_90d` (at or below the lowest of at least two orders in "
+  "90 days), `same_as_last` (within 1% of the last price), `above_last` or "
+  "`below_last`. `label` is ready-to-show text for it."
 )
 
 rfq_quotation_list_docs = extend_schema_view(
@@ -858,7 +905,7 @@ rfq_quotation_list_docs = extend_schema_view(
       "Every quotation received on this RFQ, ranked by score, best first. Withdrawn "
       "quotations are left out. Not paginated. `source` is `own` for the owner's own "
       "supplier and `platform` for the platform pool. " + RANKING_NOTE + " "
-      + QUOTATION_FIELDS_NOTE + " " + ACCESS_NOTE
+      + PRICE_CHECK_NOTE + " " + QUOTATION_FIELDS_NOTE + " " + ACCESS_NOTE
     ),
     parameters=[
       OpenApiParameter(
@@ -879,7 +926,10 @@ rfq_quotation_list_docs = extend_schema_view(
       ),
       OpenApiParameter(
         "weight_reliability", OpenApiTypes.FLOAT, OpenApiParameter.QUERY,
-        description="Optional. Priority of supplier reliability, 0 to 1000.",
+        description=(
+          "Optional. Priority of supplier reliability (their delivery record on "
+          "Kosh), 0 to 1000. A supplier with no history counts as a neutral 50."
+        ),
       ),
       OpenApiParameter(
         "sort", OpenApiTypes.STR, OpenApiParameter.QUERY,
@@ -909,14 +959,15 @@ rfq_quotation_list_docs = extend_schema_view(
             "is_late": True,
             "late_by_days": 1,
             "rank": 2,
-            "score": 88.6,
+            "score": 82.8,
             "badges": [],
             "breakdown": {
-              "price": {"score": 97.3, "weight": 58.8},
-              "delivery": {"score": 66.7, "weight": 29.4},
-              "payment": {"score": 100.0, "weight": 11.8},
-              "reliability": {"score": None, "weight": 0.0},
+              "price": {"score": 97.3, "weight": 50.0},
+              "delivery": {"score": 66.7, "weight": 25.0},
+              "payment": {"score": 100.0, "weight": 10.0},
+              "reliability": {"score": 50.0, "weight": 15.0},
             },
+            "reliability": None,
           },
         ]),
         ok_example("No Quotations Yet", "Quotations fetched.", data=[]),
