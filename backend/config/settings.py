@@ -72,6 +72,8 @@ RECAPTCHA_SECRET_KEY = os.getenv("RECAPTCHA_SECRET_KEY", "")
 RECAPTCHA_MIN_SCORE = float(os.getenv("RECAPTCHA_MIN_SCORE", "0.5"))
 RECAPTCHA_ENABLED = os.getenv("RECAPTCHA_ENABLED", "False") == "True"
 
+GOOGLE_MAPS_SERVER_KEY = os.getenv("GOOGLE_MAPS_SERVER_KEY", "")
+
 # Application definition
 SITE_ID=1
 INSTALLED_APPS = [
