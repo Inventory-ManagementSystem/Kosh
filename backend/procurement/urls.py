@@ -2,6 +2,8 @@ from django.urls import path
 from . import views
 from . import pdf_views
 from . import quotation_status_views
+from . import savings_views
+from . import savings_series_views
 
 urlpatterns = [
   path("rfqs/", views.RFQListApi.as_view(), name="rfq-list"),
@@ -57,5 +59,7 @@ urlpatterns = [
   path("supplier/goods-receipts/<uuid:pk>/pdf/", pdf_views.SupplierGoodsReceiptPdfApi.as_view(), name="supplier-grn-pdf"),
   path("rfqs/<uuid:pk>/quotations/pdf/", pdf_views.RFQComparisonPdfApi.as_view(), name="rfq-comparison-pdf"),
   path("supplier/quotations/", quotation_status_views.SupplierQuotationStatusListApi.as_view(), name="supplier-quotation-list"),
+  path("savings/", savings_views.SavingsSummaryApi.as_view(), name="savings-summary"),
+  path("savings/series/", savings_series_views.SavingsSeriesApi.as_view(), name="savings-series"),
   
 ]
