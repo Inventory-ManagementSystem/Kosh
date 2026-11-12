@@ -242,15 +242,24 @@ class WarehouseSerializer(serializers.ModelSerializer):
             "id",
             "name",
             "address",
+            "latitude",
+            "longitude",
             "created_at",
             "updated_at",
         ]
         read_only_fields = [
             "id",
+            "latitude",
+            "longitude",
             "created_at",
             "updated_at",
         ]
 
+    def update(self, instance, validated_data):
+        if "address" in validated_data and validated_data["address"] != instance.address:
+            instance.latitude = None
+            instance.longitude = None
+        return super().update(instance, validated_data)
     def validate_name(self, value):
         return clean_name(value)
 
