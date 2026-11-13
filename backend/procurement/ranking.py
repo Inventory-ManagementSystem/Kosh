@@ -2,6 +2,7 @@ DEFAULT_WEIGHTS = {"price": 50, "delivery": 25, "payment": 10, "reliability": 15
 NEUTRAL = 0.5
 MAX_WEIGHT = 1000
 
+from .reliability import reliability_stats, reliability_summary
 
 class WeightError(Exception):
   def __init__(self, message, code="INVALID_WEIGHTS"):
@@ -26,15 +27,11 @@ def parse_weights(params):
   return weights
 
 
-def reliability_score(supplier_profile):
-
-  return None
-
-
 def rank_quotations(quotations, weights):
   if not quotations:
     return []
 
+  stats = reliability_stats(q.supplier_profile_id for q in quotations)
   created = quotations[0].rfq.created_at.date()
   prices = {q.pk: float(q.grand_total) for q in quotations}
   days = {q.pk: max((q.delivery_date - created).days, 1) for q in quotations}
@@ -45,11 +42,12 @@ def rank_quotations(quotations, weights):
   for q in quotations:
     price = prices[q.pk]
     advance_share = float(q.advance_amount) / price if price > 0 else 0.0
+    history = stats.get(q.supplier_profile_id)
     raw[q.pk] = {
       "price": best_price / price if price > 0 else 1.0,
       "delivery": best_days / days[q.pk],
       "payment": max(0.0, 1.0 - advance_share),
-      "reliability": reliability_score(q.supplier_profile),
+      "reliability": history["score"] if history else None,
     }
 
   active = {
@@ -76,7 +74,13 @@ def rank_quotations(quotations, weights):
         "score": None if value is None else round(value * 100, 1),
         "weight": round(share * 100, 1),
       }
-    results.append({"quotation": q, "score": round(score * 100, 1), "breakdown": breakdown})
+
+    results.append({
+      "quotation": q,
+      "score": round(score * 100, 1),
+      "breakdown": breakdown,
+      "reliability": reliability_summary(stats.get(q.supplier_profile_id)),
+    })
 
   results.sort(key=lambda r: (
     -r["score"], r["quotation"].grand_total, r["quotation"].submitted_at

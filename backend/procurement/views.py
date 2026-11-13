@@ -23,6 +23,8 @@ from .dispatch_services import mark_dispatched
 from notifications.models import Notification
 from notifications.services import notify_many
 from django.db.models import Exists, OuterRef
+from .price_comp import price_history
+
 
 from .SwaggerDocs import (
   reorder_alert_list_docs,
@@ -431,6 +433,9 @@ class RFQQuotationListApi(APIView):
     except WeightError as err:
       return error_response(err.message, err.code, status=status.HTTP_400_BAD_REQUEST)
 
+    product_ids = list(rfq.items.values_list("product_id", flat=True))
+    history = price_history(request.business, product_ids, exclude_rfq_id=rfq.pk)
+
     ordered = ranked
     if request.query_params.get("sort") == "price":
       ordered = sorted(
@@ -441,7 +446,10 @@ class RFQQuotationListApi(APIView):
       OwnerQuotationSerializer(
         [r["quotation"] for r in ordered],
         many=True,
-        context={"ranking": {r["quotation"].pk: r for r in ranked}},
+        context={
+          "ranking": {r["quotation"].pk: r for r in ranked},
+          "price_history": history,
+        },
       ).data,
     )
 
