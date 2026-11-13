@@ -13,10 +13,11 @@ from accounts.swagger import UNAUTHORIZED_RESPONSE, THROTTLED_EXAMPLE, err_examp
 from .models import SupplierProfile, SupplyCategory, Supplier
 from accounts.permissions import HasBusinessAccess, IsOwnerOrReadOnly
 from .permissions import IsSupplier
-from .serializers import SupplierProfileSerializer, SupplyCategorySerializer, OwnerSupplierSerializer, PayoutAccountInputSerializer, PayoutAccountSerializer
-from .throttles import SupplierRegistrationThrottle, OwnerSupplierThrottle, PayoutAccountThrottle
+from .serializers import SupplierProfileSerializer, SupplyCategorySerializer, OwnerSupplierSerializer, PayoutAccountInputSerializer, PayoutAccountSerializer, NearbySupplierQuerySerializer, NearbySupplierSerializer
+from .throttles import SupplierRegistrationThrottle, OwnerSupplierThrottle, PayoutAccountThrottle, NearbySupplierThrottle
+from .nearby import business_origin, suppliers_within
 
-from .SwaggerDocs import owner_supplier_list_create_docs, owner_supplier_detail_docs
+from .SwaggerDocs import owner_supplier_list_create_docs, owner_supplier_detail_docs, nearby_supplier_docs
 from notifications import events
 
 import logging
@@ -438,4 +439,43 @@ class SupplierPayoutAccountApi(APIView):
     return success_response("Payout details saved.", {
       "account": PayoutAccountSerializer(account).data,
       "released_payouts": released,
+    })
+
+
+
+
+@nearby_supplier_docs
+class NearbySupplierApi(APIView):
+  permission_classes = [IsAuthenticated, HasBusinessAccess]
+  throttle_classes = [NearbySupplierThrottle]
+
+  def get(self, request):
+    query = NearbySupplierQuerySerializer(data=request.query_params)
+    if not query.is_valid():
+      return validation_error_response(query)
+    params = query.validated_data
+    origin, warehouse = business_origin(request.business)
+    if origin is None:
+      return error_response(
+        "We couldn't find your warehouse on the map. Add a full warehouse address and try again.",
+        "WAREHOUSE_LOCATION_MISSING",
+      )
+
+    suppliers = suppliers_within(
+      request.business,
+      origin,
+      params["radius"],
+      category=params.get("category"),
+      source=params["source"],
+    )
+    return success_response("Nearby suppliers fetched.", {
+      "origin": {
+        "name": warehouse.name,
+        "address": warehouse.address,
+        "latitude": float(origin[0]),
+        "longitude": float(origin[1]),
+      },
+      "radius_km": params["radius"],
+      "count": len(suppliers),
+      "results": NearbySupplierSerializer(suppliers, many=True).data,
     })

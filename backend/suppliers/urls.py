@@ -8,4 +8,5 @@ urlpatterns = [
   path("my-suppliers/", views.OwnerSupplierListCreateApi.as_view(), name="owner-supplier-list"),
   path("my-suppliers/<uuid:pk>/", views.OwnerSupplierDetailApi.as_view(), name="owner-supplier-detail"),
   path("payout-account/", views.SupplierPayoutAccountApi.as_view(), name="supplier-payout-account"),
+  path("nearby/", views.NearbySupplierApi.as_view(), name="supplier-nearby"),
 ]
