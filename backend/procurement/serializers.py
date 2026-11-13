@@ -28,7 +28,8 @@ from .models import (
 )
 from .services import calculate_totals
 
-
+from inventory.models import Product
+from suppliers.models import SupplierProfile
 
 
 class RFQItemSerializer(serializers.ModelSerializer):
@@ -429,6 +430,38 @@ class BulkRFQCreateSerializer(serializers.Serializer):
     if len(ids) != len(set(ids)):
       raise serializers.ValidationError("Each alert can be selected only once.")
     return alerts
+
+
+class DirectRFQItemSerializer(serializers.Serializer):
+  product = serializers.UUIDField()
+  quantity = serializers.IntegerField(min_value=1, max_value=1_000_000)
+
+
+class DirectRFQCreateSerializer(serializers.Serializer):
+  supplier = serializers.PrimaryKeyRelatedField(
+    queryset=SupplierProfile.objects.filter(is_verified=True)
+  )
+  items = DirectRFQItemSerializer(many=True, allow_empty=False)
+  notes = serializers.CharField(required=False, allow_blank=True, max_length=1000, default="")
+
+  def validate_items(self, items):
+    if len(items) > 50:
+      raise serializers.ValidationError("You can add at most 50 products to an RFQ.")
+    ids = [item["product"] for item in items]
+    if len(ids) != len(set(ids)):
+      raise serializers.ValidationError("Each product can be added only once.")
+    products = {
+      product.pk: product
+      for product in Product.objects.select_related("supply_category").filter(
+        business=self.context["business"], is_active=True, pk__in=ids
+      )
+    }
+    if len(products) != len(ids):
+      raise serializers.ValidationError("One or more products were not found.")
+    return [
+      {"product": products[item["product"]], "quantity": item["quantity"]}
+      for item in items
+    ]
 
 class PurchaseOrderSummarySerializer(serializers.ModelSerializer):
   rfq_id = serializers.UUIDField(read_only=True)

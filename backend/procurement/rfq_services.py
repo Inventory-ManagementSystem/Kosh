@@ -175,3 +175,79 @@ def create_rfq_for_suggestion(
   return rfqs[0]
 
 
+
+
+@transaction.atomic
+def create_direct_rfqs(business, profile, items, notes="", created_by=None):
+  supplied = set(profile.categories.values_list("pk", flat=True))
+  groups = {}
+  for item in items:
+    product = item["product"]
+    if product.supply_category_id is None:
+      raise RFQCreationError(
+        f"Set a supply category on {product.name} so we know which suppliers to ask.",
+        "NO_SUPPLY_CATEGORY",
+      )
+    if product.supply_category_id not in supplied:
+      raise RFQCreationError(
+        f"{profile.company_name} doesn't supply {product.supply_category.name}.",
+        "CATEGORY_NOT_SUPPLIED",
+      )
+    group = groups.setdefault(
+      product.supply_category_id,
+      {"category": product.supply_category, "rows": []},
+    )
+    group["rows"].append((product, item["quantity"]))
+
+  record = Supplier.objects.filter(
+    business=business, is_active=True, linked_account=profile
+  ).first()
+  source = RFQRecipient.Source.OWN if record else RFQRecipient.Source.PLATFORM
+  Business.objects.select_for_update().get(pk=business.pk)
+  deadline = timezone.now() + timedelta(days=RFQ_DEADLINE_DAYS)
+  rfqs = []
+  for group in sorted(groups.values(), key=lambda g: g["category"].name):
+    rows = group["rows"]
+    rfq = RFQ.objects.create(
+      business=business,
+      number=next_rfq_number(business),
+      supply_category=group["category"],
+      include_platform_pool=record is None,
+      deadline=deadline,
+      notes=notes,
+      created_by=created_by,
+    )
+    RFQItem.objects.bulk_create([
+      RFQItem(
+        rfq=rfq, product=product, product_name=product.name,
+        sku=product.sku, quantity=qty,
+      )
+      for product, qty in rows
+    ])
+    RFQRecipient.objects.create(
+      rfq=rfq, supplier_profile=profile, supplier=record, source=source
+    )
+    ReorderSuggestion.objects.filter(
+      business=business,
+      product__in=[product for product, _ in rows],
+      status=ReorderSuggestion.Status.OPEN,
+    ).update(
+      rfq=rfq,
+      status=ReorderSuggestion.Status.RFQ_CREATED,
+      updated_at=timezone.now(),
+    )
+
+    if len(rows) == 1:
+      product, qty = rows[0]
+      need = f"{business.business_name} needs {qty} x {product.name}."
+    else:
+      need = f"{business.business_name} needs {len(rows)} products ({group['category'].name})."
+    notify(
+      profile.user,
+      f"New RFQ {rfq.number}",
+      f"{need} Send your quotation before {rfq.deadline:%d %b %Y}.",
+      kind=Notification.Kind.RFQ,
+    )
+    rfqs.append(rfq)
+
+  return rfqs
