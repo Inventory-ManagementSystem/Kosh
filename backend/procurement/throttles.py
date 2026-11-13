@@ -13,3 +13,6 @@ class QuotationWriteThrottle(UserRateThrottle):
 
 class OrderWriteThrottle(QuotationWriteThrottle):
   scope = "order_write"
+
+class DirectRFQThrottle(QuotationWriteThrottle):
+  scope = "direct_rfq"

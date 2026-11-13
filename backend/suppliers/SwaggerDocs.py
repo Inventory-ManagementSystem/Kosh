@@ -305,3 +305,66 @@ owner_supplier_detail_docs = extend_schema_view(
     },
   ),
 )
+
+
+NEARBY_SUPPLIER_EXAMPLE = {
+  "origin": {
+    "name": "Main Warehouse",
+    "address": "Plot 22, Okhla Phase 2",
+    "latitude": 28.534512,
+    "longitude": 77.27341,
+  },
+  "radius_km": 10,
+  "count": 1,
+  "results": [
+    {
+      "id": "3f0c2a1e-8b7d-4c5e-9a10-2b3c4d5e6f70",
+      "company_name": "Sharma Traders",
+      "address": "Shop 14, Naya Bazar",
+      "city": "Delhi",
+      "pincode": "110006",
+      "category_names": ["Beverages", "Groceries and FMCG"],
+      "latitude": 28.656159,
+      "longitude": 77.21791,
+      "distance_km": 8.42,
+      "in_my_suppliers": True,
+      "supplier_id": "a41f7c90-2d5b-4e68-8c13-5b9e0d7a6f21",
+    }
+  ],
+}
+
+nearby_supplier_docs = extend_schema(
+  summary="Nearby Suppliers",
+  description=(
+    "Verified suppliers within `radius` km of the business warehouse, nearest first, "
+    "for the supplier map. Distances are straight-line from the warehouse address. "
+    "Suppliers whose address has not been located on the map yet are left out. "
+    "`source` picks your own suppliers (`mine`), the rest of the platform "
+    "(`platform`) or both (`all`). Both the owner and employees can read it."
+  ),
+  parameters=[
+    OpenApiParameter("radius", OpenApiTypes.INT, OpenApiParameter.QUERY,
+                     enum=[5, 10, 50], description="Radius in km. Defaults to 10."),
+    OpenApiParameter("category", OpenApiTypes.INT, OpenApiParameter.QUERY,
+                     description="Supply category id."),
+    OpenApiParameter("source", OpenApiTypes.STR, OpenApiParameter.QUERY,
+                     enum=["all", "mine", "platform"], description="Defaults to all."),
+  ],
+  responses={
+    200: resp("Nearby suppliers.",
+              ok_example("Nearby", "Nearby suppliers fetched.", data=NEARBY_SUPPLIER_EXAMPLE)),
+    400: resp(
+      "Bad filter, or the warehouse could not be found on the map.",
+      err_example("Bad Radius", "Validation failed.", "VALIDATION_ERROR",
+                  errors={"radius": ['"7" is not a valid choice.']}),
+      err_example(
+        "No Location",
+        "We couldn't find your warehouse on the map. Add a full warehouse address and try again.",
+        "WAREHOUSE_LOCATION_MISSING",
+      ),
+    ),
+    401: UNAUTHORIZED_RESPONSE,
+    403: FORBIDDEN_RESPONSE,
+    429: THROTTLED_RESPONSE,
+  },
+)

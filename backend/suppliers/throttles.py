@@ -22,3 +22,8 @@ class PayoutAccountThrottle(UserRateThrottle):
     if request.method in SAFE_METHODS:
       return True
     return super().allow_request(request, view)
+
+
+class NearbySupplierThrottle(UserRateThrottle):
+  scope = "nearby_supplier"
+  rate = "30/min"
