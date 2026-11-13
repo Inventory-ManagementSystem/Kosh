@@ -4,7 +4,7 @@ from rest_framework import serializers
 from accounts.validators import validate_phone_number
 from .models import SupplierProfile, SupplyCategory, Supplier, SupplierPayoutAccount
 from .tasks import geocode_supplier_profile
-
+from .nearby import RADIUS_CHOICES
 
 GSTIN_REGEX = re.compile(r"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$") 
 LOCATION_FIELDS = ("address", "city", "pincode")
@@ -246,3 +246,46 @@ class PayoutAccountSerializer(serializers.ModelSerializer):
       "vpa", "updated_at",
     ]
     read_only_fields = fields
+
+
+class NearbySupplierQuerySerializer(serializers.Serializer):
+  radius = serializers.ChoiceField(choices=RADIUS_CHOICES, default=10)
+  category = serializers.PrimaryKeyRelatedField(
+    queryset=SupplyCategory.objects.filter(is_active=True), required=False,
+  )
+  source = serializers.ChoiceField(choices=["all", "mine", "platform"], default="all")
+
+
+class NearbySupplierSerializer(serializers.ModelSerializer):
+  category_names = serializers.SlugRelatedField(
+    source="categories",
+    many=True,
+    read_only=True,
+    slug_field="name",
+  )
+  latitude = serializers.FloatField(read_only=True)
+  longitude = serializers.FloatField(read_only=True)
+  distance_km = serializers.FloatField(read_only=True)
+  in_my_suppliers = serializers.SerializerMethodField()
+  supplier_id = serializers.SerializerMethodField()
+
+  class Meta:
+    model = SupplierProfile
+    fields = [
+      "id",
+      "company_name",
+      "address",
+      "city",
+      "pincode",
+      "category_names",
+      "latitude",
+      "longitude",
+      "distance_km",
+      "in_my_suppliers",
+      "supplier_id",
+    ]
+
+  def get_in_my_suppliers(self, obj):
+    return obj.supplier_record is not None
+  def get_supplier_id(self, obj):
+    return str(obj.supplier_record.pk) if obj.supplier_record else None
