@@ -1,3 +1,10 @@
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
 
   redis:
@@ -5,6 +12,7 @@ services:
     restart: unless-stopped
     volumes:
       - redis_data:/data
+    logging: *default-logging
 
   backend:
     build: ./backend
@@ -12,9 +20,12 @@ services:
       - "127.0.0.1:8001:8000"
     env_file:
       - .env
+    environment:
+      GUNICORN_CMD_ARGS: "--access-logfile - --error-logfile - --capture-output"
     depends_on:
       redis:
         condition: service_started
+    logging: *default-logging
 
   worker:
     build: ./backend
@@ -26,6 +37,7 @@ services:
     depends_on:
       redis:
         condition: service_started
+    logging: *default-logging
 
   beat:
     build: ./backend
@@ -37,6 +49,7 @@ services:
     depends_on:
       redis:
         condition: service_started
+    logging: *default-logging
 
   ws:
     build: ./backend
@@ -50,6 +63,7 @@ services:
     depends_on:
       redis:
         condition: service_started
+    logging: *default-logging
 
 volumes:
   redis_data:
