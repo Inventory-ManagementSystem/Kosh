@@ -13,3 +13,5 @@ db.sqlite3-journal
 staticfiles/
 test-*.pdf
 inv.pdf
+observability/.env
+docker-compose.observability.local.yml
