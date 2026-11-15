@@ -384,3 +384,30 @@ SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 REFRESH_COOKIE_SAMESITE = "Lax" if DEBUG else "None"
 SESSION_COOKIE_SAMESITE = "Lax" if DEBUG else "None"
 SESSION_COOKIE_SECURE = not DEBUG
+
+SESSION_COOKIE_SAMESITE = "Lax" if DEBUG else "None"
+SESSION_COOKIE_SECURE = not DEBUG
+
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+
+LOGGING = {
+  "version": 1,
+  "disable_existing_loggers": False,
+  "formatters": {
+    "standard": {
+      "format": "{asctime} {levelname} {name} {message}",
+      "style": "{",
+    },
+  },
+  "handlers": {
+    "console": {"class": "logging.StreamHandler", "formatter": "standard"},
+  },
+  "root": {"handlers": ["console"], "level": LOG_LEVEL},
+  "loggers": {
+    "django": {"handlers": ["console"], "level": "INFO", "propagate": False},
+    "botocore": {"level": "WARNING"},
+    "boto3": {"level": "WARNING"},
+    "s3transfer": {"level": "WARNING"},
+    "urllib3": {"level": "WARNING"},
+  },
+}

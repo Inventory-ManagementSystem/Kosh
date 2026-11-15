@@ -27,3 +27,5 @@ jobs:
             docker compose -f docker-compose.prod.yml exec -T backend python manage.py migrate
 
             docker compose -f docker-compose.prod.yml ps
+
+            docker compose --env-file observability/.env -f docker-compose.observability.yml up -d
