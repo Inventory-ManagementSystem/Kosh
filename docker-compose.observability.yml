@@ -45,6 +45,8 @@ services:
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_ANALYTICS_REPORTING_ENABLED: "false"
       GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:-http://localhost:3000/}
+      GF_SECURITY_COOKIE_SECURE: ${GRAFANA_COOKIE_SECURE:-false}
     volumes:
       - grafana_data:/var/lib/grafana
       - ./observability/grafana-datasource.yml:/etc/grafana/provisioning/datasources/datasources.yml:ro
@@ -55,6 +57,39 @@ services:
       - prometheus
     logging: *default-logging
 
+  tempo:
+    image: grafana/tempo:2.9.0
+    restart: unless-stopped
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./observability/tempo/tempo.yaml:/etc/tempo.yaml:ro
+      - tempo_data:/var/tempo
+    ports:
+      - "127.0.0.1:3200:3200"
+    mem_limit: 400m
+    logging: *default-logging
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.164.0
+    restart: unless-stopped
+    volumes:
+      - ./observability/otel-collector/config.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - "127.0.0.1:4318:4318"
+    mem_limit: 256m
+    depends_on:
+      - tempo
+    logging: *default-logging
+    networks:
+      - default
+      - app
+
 volumes:
   prometheus_data:
   grafana_data:
+  tempo_data:
+
+networks:
+  app:
+    name: ${APP_NETWORK:-kosh_default}
+    external: true
